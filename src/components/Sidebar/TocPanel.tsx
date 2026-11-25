@@ -110,11 +110,23 @@ export function TocPanel({
       {nodes.map((node) => {
         const hasChildren = node.children.length > 0;
         const isExpanded = hasChildren && expandedSet.has(node.id);
+        const isClickable = node.destPage !== null;
         return (
           <li key={node.id} role="treeitem" aria-expanded={hasChildren ? isExpanded : undefined}>
             <div
-              className="flex items-center gap-0.5 rounded-md py-1 pr-2 text-xs text-neutral-700 hover:bg-black/5 dark:text-neutral-200 dark:hover:bg-white/8"
-              style={{ paddingLeft: `${depth * 14 + 4}px` }}
+              data-toc-row={node.id}
+              onClick={() => {
+                if (node.destPage !== null) {
+                  onSelectDestination(node.destPage, node.destTopPt);
+                }
+              }}
+              title={node.title}
+              className={`flex items-stretch rounded-md text-xs text-neutral-700 dark:text-neutral-200 ${
+                isClickable
+                  ? 'cursor-pointer hover:bg-black/5 dark:hover:bg-white/8'
+                  : 'cursor-default opacity-50'
+              }`}
+              style={{ paddingLeft: `${depth * 14 + 2}px` }}
             >
               {hasChildren ? (
                 <button
@@ -125,7 +137,7 @@ export function TocPanel({
                     handleToggle(node.id);
                   }}
                   aria-label={isExpanded ? `Collapse ${node.title}` : `Expand ${node.title}`}
-                  className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-neutral-400 hover:bg-black/8 hover:text-neutral-700 dark:hover:bg-white/10 dark:hover:text-neutral-200"
+                  className="flex w-6 shrink-0 items-center justify-center self-stretch rounded-l-md text-neutral-400 hover:bg-black/8 hover:text-neutral-700 dark:hover:bg-white/10 dark:hover:text-neutral-200"
                 >
                   {isExpanded ? (
                     <ChevronDown className="h-3.5 w-3.5" />
@@ -134,19 +146,19 @@ export function TocPanel({
                   )}
                 </button>
               ) : (
-                <span className="h-5 w-5 shrink-0" />
+                <span className="w-6 shrink-0 self-stretch" aria-hidden="true" />
               )}
 
               <button
                 type="button"
-                disabled={node.destPage === null}
-                onClick={() => {
+                disabled={!isClickable}
+                onClick={(e) => {
+                  e.stopPropagation();
                   if (node.destPage !== null) {
                     onSelectDestination(node.destPage, node.destTopPt);
                   }
                 }}
-                title={node.title}
-                className="flex min-w-0 flex-1 items-center justify-between gap-2 text-left disabled:cursor-default disabled:opacity-50"
+                className="flex min-w-0 flex-1 items-center justify-between gap-2 py-1 pr-2 text-left disabled:cursor-default"
               >
                 <span className="truncate leading-snug">{node.title}</span>
                 {node.destPage !== null && (

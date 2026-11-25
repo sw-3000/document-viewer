@@ -69,8 +69,10 @@ export function PdfViewport({
     typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1,
   );
   const renderCache = useMemo(() => new PageRenderCache(10), [pdfDoc]);
+  const lastPrefetchScaleRef = useRef<{ scale: number; dpr: number } | null>(null);
 
   useEffect(() => {
+    lastPrefetchScaleRef.current = null;
     return () => {
       renderCache.clear();
     };
@@ -204,6 +206,8 @@ export function PdfViewport({
 
   // Pre-render ±1 adjacent pages/spreads in paginated modes (Single Page / Two Pages)
   // so page flips blit from cache immediately without placeholder flicker.
+  // Debounce cache pruning/prefetching when scale/dpr is actively resizing so live window
+  // drags do not thrash PageRenderCache on every intermediate pixel tick.
   useEffect(() => {
     if (session.viewMode === 'continuous' || session.totalPages <= 0) {
       return;
@@ -217,18 +221,30 @@ export function PdfViewport({
       1,
     );
     const allowedSet = new Set(prefetchPages);
-    renderCache.prune(allowedSet, effectiveScale, dpr);
+
+    const prevScale = lastPrefetchScaleRef.current;
+    const isRescaling =
+      prevScale !== null &&
+      (prevScale.scale !== effectiveScale || prevScale.dpr !== dpr);
+    const delayMs = isRescaling ? 150 : 0;
+
+    if (!isRescaling) {
+      lastPrefetchScaleRef.current = { scale: effectiveScale, dpr };
+      renderCache.prune(allowedSet, effectiveScale, dpr);
+    }
 
     let cancelled = false;
     const timer = window.setTimeout(() => {
       if (cancelled) return;
+      lastPrefetchScaleRef.current = { scale: effectiveScale, dpr };
+      renderCache.prune(allowedSet, effectiveScale, dpr);
       for (const pageNum of prefetchPages) {
         if (cancelled) return;
         const dim = session.pageDimensions[pageNum - 1] ??
           session.pageDimensions[0] ?? { widthPt: 612, heightPt: 792 };
         void renderCache.prefetch(pdfDoc, pageNum, dim, effectiveScale, dpr);
       }
-    }, 0);
+    }, delayMs);
 
     return () => {
       cancelled = true;

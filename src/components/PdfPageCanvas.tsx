@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { PDFDocumentProxy, PDFPageProxy, RenderTask } from 'pdfjs-dist';
 import type { PageDimension, PdfLinkAnnotation, SearchMatch } from '../types/viewer';
 import { computeHiDpiCanvasSize } from '../lib/zoom';
@@ -6,6 +6,7 @@ import type { PageRenderCache } from '../lib/pageRenderCache';
 import { extractPageLinks } from '../services/pdfEngine';
 
 export const LOADING_PLACEHOLDER_DELAY_MS = 180;
+export const RESIZE_RENDER_DEBOUNCE_MS = 140;
 
 interface PdfPageCanvasProps {
   pdfDoc: PDFDocumentProxy;
@@ -34,10 +35,33 @@ export function PdfPageCanvas({
   const [showPlaceholder, setShowPlaceholder] = useState(false);
   const [links, setLinks] = useState<PdfLinkAnnotation[]>([]);
 
+  const renderedIdentityRef = useRef<{
+    pdfDoc: PDFDocumentProxy;
+    pageNumber: number;
+  } | null>(null);
+  const hasBitmapRef = useRef(false);
+
   const sizing = computeHiDpiCanvasSize(dimension, scale, devicePixelRatio);
 
-  // Synchronous double-buffered blit when cached, or offscreen render with delayed
-  // placeholder (> 180ms) to eliminate page-flip flicker.
+  // Release GPU backing bitmap strictly on component unmount/eviction so live scale
+  // changes on a mounted page keep the previous sharp bitmap intact via CSS scaling.
+  useEffect(() => {
+    return () => {
+      hasBitmapRef.current = false;
+      renderedIdentityRef.current = null;
+      const canvas = canvasRef.current;
+      if (canvas) {
+        canvas.width = 0;
+        canvas.height = 0;
+      }
+    };
+  }, []);
+
+  // Two-phase macOS Preview-style rendering:
+  // - Cache hit: synchronous blit on visible canvas.
+  // - Rescale of already-rendered mounted page: keep existing bitmap CSS-scaled (zero clear/flicker),
+  //   then debounce offscreen HiDPI re-render and atomically blit once settled.
+  // - Brand new page mount (cache miss): render offscreen immediately with 180ms delayed placeholder.
   useLayoutEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -47,11 +71,16 @@ export function PdfPageCanvas({
     let activePage: PDFPageProxy | null = null;
     let offscreenCanvas: HTMLCanvasElement | null = null;
     let placeholderTimer: number | null = null;
+    let debounceTimer: number | null = null;
 
-    const clearPlaceholderTimer = () => {
+    const clearTimers = () => {
       if (placeholderTimer !== null) {
         window.clearTimeout(placeholderTimer);
         placeholderTimer = null;
+      }
+      if (debounceTimer !== null) {
+        window.clearTimeout(debounceTimer);
+        debounceTimer = null;
       }
     };
 
@@ -63,9 +92,10 @@ export function PdfPageCanvas({
       if (ctx) {
         ctx.drawImage(cached, 0, 0);
       }
+      hasBitmapRef.current = true;
+      renderedIdentityRef.current = { pdfDoc, pageNumber };
       setShowPlaceholder(false);
 
-      // Lazily populate interactive internal links without touching the rendered bitmap
       void (async () => {
         try {
           const page = await pdfDoc.getPage(pageNumber);
@@ -85,6 +115,7 @@ export function PdfPageCanvas({
 
       return () => {
         cancelled = true;
+        clearTimers();
         if (activePage) {
           try {
             activePage.cleanup();
@@ -92,10 +123,13 @@ export function PdfPageCanvas({
             // Ignore cleanup error
           }
         }
-        canvas.width = 0;
-        canvas.height = 0;
       };
     }
+
+    const isSamePageRescale =
+      hasBitmapRef.current &&
+      renderedIdentityRef.current?.pdfDoc === pdfDoc &&
+      renderedIdentityRef.current?.pageNumber === pageNumber;
 
     const { pixelWidth, pixelHeight, renderScale } = computeHiDpiCanvasSize(
       dimension,
@@ -103,20 +137,25 @@ export function PdfPageCanvas({
       devicePixelRatio,
     );
 
-    canvas.width = pixelWidth;
-    canvas.height = pixelHeight;
-    const visibleCtx = canvas.getContext('2d', { alpha: false });
-    if (visibleCtx) {
-      visibleCtx.fillStyle = '#ffffff';
-      visibleCtx.fillRect(0, 0, pixelWidth, pixelHeight);
-    }
-
-    setShowPlaceholder(false);
-    placeholderTimer = window.setTimeout(() => {
-      if (!cancelled) {
-        setShowPlaceholder(true);
+    if (!isSamePageRescale) {
+      hasBitmapRef.current = false;
+      renderedIdentityRef.current = { pdfDoc, pageNumber };
+      canvas.width = pixelWidth;
+      canvas.height = pixelHeight;
+      const visibleCtx = canvas.getContext('2d', { alpha: false });
+      if (visibleCtx) {
+        visibleCtx.fillStyle = '#ffffff';
+        visibleCtx.fillRect(0, 0, pixelWidth, pixelHeight);
       }
-    }, LOADING_PLACEHOLDER_DELAY_MS);
+      setShowPlaceholder(false);
+      placeholderTimer = window.setTimeout(() => {
+        if (!cancelled) {
+          setShowPlaceholder(true);
+        }
+      }, LOADING_PLACEHOLDER_DELAY_MS);
+    } else {
+      setShowPlaceholder(false);
+    }
 
     const renderPage = async () => {
       try {
@@ -129,7 +168,7 @@ export function PdfPageCanvas({
             devicePixelRatio,
           );
           if (cancelled) return;
-          clearPlaceholderTimer();
+          clearTimers();
           if (completed) {
             canvas.width = completed.width;
             canvas.height = completed.height;
@@ -137,6 +176,8 @@ export function PdfPageCanvas({
             if (ctx) {
               ctx.drawImage(completed, 0, 0);
             }
+            hasBitmapRef.current = true;
+            renderedIdentityRef.current = { pdfDoc, pageNumber };
           }
           setShowPlaceholder(false);
 
@@ -160,21 +201,28 @@ export function PdfPageCanvas({
         }
         activePage = page;
 
-        // Render onto a detached offscreen buffer, then blit atomically onto the visible canvas
+        // Render completely offscreen first, then resize & blit onto visible canvas atomically
         offscreenCanvas = document.createElement('canvas');
         offscreenCanvas.width = pixelWidth;
         offscreenCanvas.height = pixelHeight;
         const offscreenCtx = offscreenCanvas.getContext('2d', { alpha: false });
+        const visibleCtx = canvas.getContext('2d', { alpha: false });
+
         const targetCanvas = offscreenCtx ? offscreenCanvas : canvas;
         const targetCtx = offscreenCtx ?? visibleCtx;
         if (!targetCtx) {
-          clearPlaceholderTimer();
+          clearTimers();
           if (offscreenCanvas) {
             offscreenCanvas.width = 0;
             offscreenCanvas.height = 0;
             offscreenCanvas = null;
           }
           return;
+        }
+
+        if (!offscreenCtx) {
+          canvas.width = pixelWidth;
+          canvas.height = pixelHeight;
         }
 
         targetCtx.fillStyle = '#ffffff';
@@ -190,15 +238,22 @@ export function PdfPageCanvas({
         await activeTask.promise;
         if (cancelled) return;
 
-        clearPlaceholderTimer();
-        if (offscreenCtx && visibleCtx && offscreenCanvas) {
-          visibleCtx.drawImage(offscreenCanvas, 0, 0);
+        clearTimers();
+        if (offscreenCtx && offscreenCanvas) {
+          canvas.width = pixelWidth;
+          canvas.height = pixelHeight;
+          const postCtx = canvas.getContext('2d', { alpha: false });
+          if (postCtx) {
+            postCtx.drawImage(offscreenCanvas, 0, 0);
+          }
         }
         if (offscreenCanvas) {
           offscreenCanvas.width = 0;
           offscreenCanvas.height = 0;
           offscreenCanvas = null;
         }
+        hasBitmapRef.current = true;
+        renderedIdentityRef.current = { pdfDoc, pageNumber };
         setShowPlaceholder(false);
 
         const pageLinks = await extractPageLinks(pdfDoc, page);
@@ -207,18 +262,26 @@ export function PdfPageCanvas({
         }
       } catch (err: unknown) {
         const e = err as { name?: string };
-        clearPlaceholderTimer();
+        clearTimers();
         if (e?.name !== 'RenderingCancelledException' && !cancelled) {
           setShowPlaceholder(false);
         }
       }
     };
 
-    void renderPage();
+    if (isSamePageRescale) {
+      debounceTimer = window.setTimeout(() => {
+        if (!cancelled) {
+          void renderPage();
+        }
+      }, RESIZE_RENDER_DEBOUNCE_MS);
+    } else {
+      void renderPage();
+    }
 
     return () => {
       cancelled = true;
-      clearPlaceholderTimer();
+      clearTimers();
       if (activeTask) {
         try {
           activeTask.cancel();
@@ -238,9 +301,6 @@ export function PdfPageCanvas({
         offscreenCanvas.height = 0;
         offscreenCanvas = null;
       }
-      // Explicitly release GPU backing bitmap on eviction
-      canvas.width = 0;
-      canvas.height = 0;
     };
   }, [
     pdfDoc,
