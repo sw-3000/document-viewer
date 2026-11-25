@@ -59,6 +59,31 @@ npm run tauri build
 
 Generated release binaries and installers are placed in `src-tauri/target/release/bundle/`.
 
+## Releasing a New Version
+
+All release manifests (`package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`, plus lockfiles) share a single SemVer version (`MAJOR.MINOR.PATCH`):
+
+```powershell
+# Verify all manifests match
+npm run version:check
+
+# Bump patch / minor / major (or set an explicit version)
+npm run version:patch
+npm run version:minor
+npm run version:major
+npm run version:set -- 0.2.0
+
+# Commit the version bump, create an annotated tag, and push to trigger CI
+git add package.json package-lock.json src-tauri/Cargo.toml src-tauri/Cargo.lock src-tauri/tauri.conf.json
+git commit -m "chore: release v0.2.0"
+git tag -a v0.2.0 -m "Release v0.2.0"
+git push origin main --follow-tags
+```
+
+You can also create the annotated tag automatically during the bump step by passing `-- --tag` (e.g., `npm run version:patch -- --tag`).
+
+Pushing a `v*.*.*` tag triggers [`.github/workflows/release.yml`](.github/workflows/release.yml) on `windows-latest`, which verifies version consistency, runs all TypeScript/Vitest/Rust checks, builds the NSIS (`.exe`) and MSI (`.msi`) Windows installers, generates `SHA256SUMS.txt`, and publishes a GitHub Release with auto-generated release notes. You can also trigger `workflow_dispatch` manually for dry-run installer artifacts.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
