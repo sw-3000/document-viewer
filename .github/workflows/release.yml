@@ -13,7 +13,9 @@ jobs:
   build-windows:
     name: Build & Package Windows (x64)
     runs-on: windows-latest
-    shell: pwsh
+    defaults:
+      run:
+        shell: pwsh
 
     steps:
       - name: Checkout repository
@@ -44,8 +46,8 @@ jobs:
 
       - name: Verify manifest SemVer consistency
         run: |
-          if ("${{ github.ref }}" -like "refs/tags/v*") {
-            node scripts/bump-version.mjs --check --expect-tag "${{ github.ref_name }}"
+          if ($env:GITHUB_REF -like "refs/tags/v*") {
+            node scripts/bump-version.mjs --check --expect-tag "$env:GITHUB_REF_NAME"
           } else {
             npm run version:check
           }
