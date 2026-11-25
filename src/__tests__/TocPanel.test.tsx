@@ -117,6 +117,32 @@ describe('TocPanel (deterministic IDs, first-open defaults, and persistence)', (
     expect(onSelect).toHaveBeenCalledWith(130, 700);
   });
 
+  it('makes the entire ToC row rectangle clickable without dead zones while isolating the chevron', () => {
+    const outline = buildBookOutline();
+    const onSelect = vi.fn();
+    const { container } = render(
+      <TocPanel outline={outline} expandedIds={null} onSelectDestination={onSelect} />,
+    );
+
+    // Clicking the outer padded row container (outside the text button) navigates immediately once
+    const introRow = container.querySelector('[data-toc-row="0"]')!;
+    expect(introRow).not.toBeNull();
+    fireEvent.click(introRow);
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(onSelect).toHaveBeenLastCalledWith(1, 720);
+
+    const ch11Row = container.querySelector('[data-toc-row="1.10"]')!;
+    expect(ch11Row).not.toBeNull();
+    fireEvent.click(ch11Row);
+    expect(onSelect).toHaveBeenCalledTimes(2);
+    expect(onSelect).toHaveBeenLastCalledWith(130, 700);
+
+    // Clicking the chevron inside that same row only toggles expansion and never navigates
+    fireEvent.click(screen.getByRole('button', { name: 'Expand Chapter 11' }));
+    expect(screen.getByText('11.1 Advanced Topics')).toBeInTheDocument();
+    expect(onSelect).toHaveBeenCalledTimes(2);
+  });
+
   it('restores saved expanded IDs including an explicit empty array (all collapsed)', () => {
     const outline = buildBookOutline();
 
