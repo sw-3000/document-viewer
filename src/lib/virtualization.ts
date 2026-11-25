@@ -235,3 +235,64 @@ export function computeScrollTopFromRatio(
   const clamped = Math.min(1, Math.max(0, ratio));
   return clamped * maxScroll;
 }
+
+export interface ScrollAnchor {
+  pageNumber: number;
+  /** Fractional offset from row.top relative to row.height */
+  offsetWithinRow: number;
+}
+
+/**
+ * Captures a scale-independent reading anchor `(pageNumber, offsetWithinRow)`
+ * for the topmost row intersecting `scrollTop` so window/sidebar resizes
+ * keep the exact same page and relative line in view.
+ */
+export function captureScrollAnchor(
+  layouts: RowLayout[],
+  scrollTop: number,
+): ScrollAnchor | null {
+  if (layouts.length === 0) return null;
+
+  let lo = 0;
+  let hi = layouts.length - 1;
+  let targetIdx = layouts.length - 1;
+
+  while (lo <= hi) {
+    const mid = (lo + hi) >>> 1;
+    const row = layouts[mid]!;
+    if (row.top + row.height >= scrollTop) {
+      targetIdx = mid;
+      hi = mid - 1;
+    } else {
+      lo = mid + 1;
+    }
+  }
+
+  const row = layouts[targetIdx]!;
+  const rawFraction = (scrollTop - row.top) / Math.max(1, row.height);
+  const offsetWithinRow = Math.min(1.5, Math.max(-0.5, rawFraction));
+
+  return {
+    pageNumber: row.pages[0] ?? 1,
+    offsetWithinRow,
+  };
+}
+
+/**
+ * Resolves a captured `ScrollAnchor` back to a pixel `scrollTop` in a newly
+ * computed layout (after zoom or viewport resize).
+ */
+export function resolveScrollTopForAnchor(
+  layouts: RowLayout[],
+  anchor: ScrollAnchor,
+): number {
+  if (layouts.length === 0) return 0;
+
+  const direct = layouts[anchor.pageNumber - 1];
+  const row =
+    direct && direct.pages.includes(anchor.pageNumber)
+      ? direct
+      : layouts.find((r) => r.pages.includes(anchor.pageNumber)) ?? layouts[0]!;
+
+  return Math.max(0, Math.round(row.top + anchor.offsetWithinRow * row.height));
+}

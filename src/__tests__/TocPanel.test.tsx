@@ -1,66 +1,154 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { TocPanel } from '../components/Sidebar/TocPanel';
+import {
+  TocPanel,
+  getDefaultExpandedTocIds,
+  resolveExpandedTocIds,
+} from '../components/Sidebar/TocPanel';
 import type { OutlineNode } from '../types/viewer';
 
-describe('TocPanel (strictly manual outline)', () => {
-  const sampleOutline: OutlineNode[] = [
+function buildBookOutline(): OutlineNode[] {
+  const chapters: OutlineNode[] = Array.from({ length: 11 }, (_, idx) => {
+    const chNum = idx + 1;
+    const id = `1.${idx}`;
+    return {
+      id,
+      title: `Chapter ${chNum}`,
+      destPage: 10 + idx * 12,
+      destTopPt: 700,
+      children:
+        chNum === 11
+          ? [
+              {
+                id: `${id}.0`,
+                title: '11.1 Advanced Topics',
+                destPage: 132,
+                destTopPt: 620,
+                children: [],
+              },
+              {
+                id: `${id}.1`,
+                title: '11.2 Summary',
+                destPage: 138,
+                destTopPt: 580,
+                children: [],
+              },
+            ]
+          : [],
+    };
+  });
+
+  return [
     {
-      id: 'toc-1',
-      title: 'Chapter 1: Getting Started',
+      id: '0',
+      title: 'Introduction',
       destPage: 1,
+      destTopPt: 720,
+      children: [],
+    },
+    {
+      id: '1',
+      title: 'Part I',
+      destPage: 10,
+      destTopPt: 720,
+      children: chapters,
+    },
+    {
+      id: '2',
+      title: 'Part II',
+      destPage: 150,
       destTopPt: 720,
       children: [
         {
-          id: 'toc-2',
-          title: '1.1 Installation',
-          destPage: 3,
-          destTopPt: 500,
-          children: [],
-        },
-      ],
-    },
-    {
-      id: 'toc-3',
-      title: 'Chapter 2: Architecture',
-      destPage: 12,
-      destTopPt: null,
-      children: [
-        {
-          id: 'toc-4',
-          title: '2.1 Virtualization',
-          destPage: 14,
-          destTopPt: 600,
+          id: '2.0',
+          title: 'Chapter 12',
+          destPage: 151,
+          destTopPt: 700,
           children: [],
         },
       ],
     },
   ];
+}
 
-  it('supports manual expand/collapse and click-to-jump without any scroll-sync or active highlight', () => {
+describe('TocPanel (deterministic IDs, first-open defaults, and persistence)', () => {
+  it('expands only depth-0 nodes on first open and keeps all deeper chapters collapsed', () => {
+    const outline = buildBookOutline();
+    expect(getDefaultExpandedTocIds(outline)).toEqual(['1', '2']);
+
     const onSelect = vi.fn();
-    render(<TocPanel outline={sampleOutline} onSelectDestination={onSelect} />);
+    render(<TocPanel outline={outline} expandedIds={null} onSelectDestination={onSelect} />);
 
-    // Top-level parents start expanded so their immediate children are visible
-    expect(screen.getByText('1.1 Installation')).toBeInTheDocument();
+    // Depth-0 nodes with children are expanded, so immediate children (depth 1) are visible
+    expect(screen.getByText('Introduction')).toBeInTheDocument();
+    expect(screen.getByText('Chapter 1')).toBeInTheDocument();
+    expect(screen.getByText('Chapter 11')).toBeInTheDocument();
+    expect(screen.getByText('Chapter 12')).toBeInTheDocument();
 
-    // Collapse Chapter 1 manually
-    fireEvent.click(screen.getByRole('button', { name: 'Collapse Chapter 1: Getting Started' }));
-    expect(screen.queryByText('1.1 Installation')).not.toBeInTheDocument();
+    // Depth-2 subsections under Chapter 11 MUST start collapsed
+    expect(screen.queryByText('11.1 Advanced Topics')).not.toBeInTheDocument();
+    expect(screen.queryByText('11.2 Summary')).not.toBeInTheDocument();
 
-    // Expand Chapter 1 manually again
-    fireEvent.click(screen.getByRole('button', { name: 'Expand Chapter 1: Getting Started' }));
-    expect(screen.getByText('1.1 Installation')).toBeInTheDocument();
-
-    // Click-to-jump fires destination page & topPt
-    fireEvent.click(screen.getByText('1.1 Installation'));
-    expect(onSelect).toHaveBeenCalledWith(3, 500);
-
-    // Verify no aria-current / active-section attribute is applied anywhere
-    const treeItems = screen.getAllByRole('treeitem');
-    for (const item of treeItems) {
+    // No active-section / scroll-sync attribute is applied
+    for (const item of screen.getAllByRole('treeitem')) {
       expect(item).not.toHaveAttribute('aria-current');
     }
+  });
+
+  it('toggles only the clicked child node without collapsing parent or triggering navigation', () => {
+    const outline = buildBookOutline();
+    const onSelect = vi.fn();
+    render(<TocPanel outline={outline} expandedIds={null} onSelectDestination={onSelect} />);
+
+    // Expand Chapter 11 (last child under Part I)
+    fireEvent.click(screen.getByRole('button', { name: 'Expand Chapter 11' }));
+    expect(screen.getByText('11.1 Advanced Topics')).toBeInTheDocument();
+    expect(onSelect).not.toHaveBeenCalled();
+
+    // Collapse Chapter 11 — Part I and its other chapters must remain expanded
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse Chapter 11' }));
+    expect(screen.queryByText('11.1 Advanced Topics')).not.toBeInTheDocument();
+    expect(screen.getByText('Chapter 1')).toBeInTheDocument();
+    expect(screen.getByText('Chapter 11')).toBeInTheDocument();
+    expect(onSelect).not.toHaveBeenCalled();
+
+    // Click-to-jump on Chapter 11 triggers destination navigation
+    fireEvent.click(screen.getByText('Chapter 11'));
+    expect(onSelect).toHaveBeenCalledWith(130, 700);
+  });
+
+  it('restores saved expanded IDs including an explicit empty array (all collapsed)', () => {
+    const outline = buildBookOutline();
+
+    expect(resolveExpandedTocIds(outline, ['1', '1.10', '99.99'])).toEqual(['1', '1.10']);
+    expect(resolveExpandedTocIds(outline, [])).toEqual([]);
+
+    const onExpandedChange = vi.fn();
+    const { rerender } = render(
+      <TocPanel
+        outline={outline}
+        expandedIds={['1', '1.10']}
+        onExpandedIdsChange={onExpandedChange}
+        onSelectDestination={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('11.1 Advanced Topics')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse Chapter 11' }));
+    expect(onExpandedChange).toHaveBeenCalledWith(['1']);
+
+    // Reopening with explicit [] keeps Part I and Part II collapsed
+    rerender(
+      <TocPanel
+        outline={outline}
+        expandedIds={[]}
+        onExpandedIdsChange={onExpandedChange}
+        onSelectDestination={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('Part I')).toBeInTheDocument();
+    expect(screen.queryByText('Chapter 1')).not.toBeInTheDocument();
+    expect(screen.queryByText('Chapter 12')).not.toBeInTheDocument();
   });
 
   it('renders an empty-state message when the PDF has no outline', () => {

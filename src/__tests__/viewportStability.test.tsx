@@ -11,6 +11,13 @@ import {
   SCROLLBAR_GUTTER_PX,
   computeScaleForZoomMode,
 } from '../lib/zoom';
+import {
+  buildVisibleRowsForMode,
+  captureScrollAnchor,
+  computeRowLayouts,
+  findVisibleRowRange,
+  resolveScrollTopForAnchor,
+} from '../lib/virtualization';
 import { PdfViewport } from '../components/PdfViewport';
 import type { TabSession } from '../types/viewer';
 
@@ -126,6 +133,7 @@ describe('viewport zoom stability and zero resize oscillation', () => {
           heightPt: 792,
         })),
         outline: [],
+        expandedTocIds: null,
         navigationRequest: null,
       };
 
@@ -186,6 +194,114 @@ describe('viewport zoom stability and zero resize oscillation', () => {
 
       expect(scaleUpdates.length).toBe(initialScaleCount + 2);
       expect(scaleUpdates[scaleUpdates.length - 1]).toBe(initialScale);
+    });
+
+    it('keeps deep page 150 anchored across window and sidebar resizes without page jumping', () => {
+      const totalPages = 400;
+      const dims = Array.from({ length: totalPages }, () => ({
+        widthPt: 612,
+        heightPt: 792,
+      }));
+      const rows = buildVisibleRowsForMode(totalPages, 'continuous', true, 1);
+
+      const initialFitScale = computeScaleForZoomMode('fit-width', 1.0, {
+        viewportWidth: 1120,
+        viewportHeight: 776,
+        page: dims[0]!,
+      });
+      const initialLayout = computeRowLayouts(rows, dims, initialFitScale, {
+        pageGap: 18,
+        verticalPadding: 24,
+        spreadGap: 16,
+      });
+
+      const page150Row = initialLayout.rows[149]!;
+      const initialPage150ScrollTop = Math.round(page150Row.top + page150Row.height * 0.3);
+      const initialScrollRatio =
+        initialPage150ScrollTop / Math.max(1, initialLayout.totalHeight - 776);
+
+      // Pure helper check across scale changes
+      const captured = captureScrollAnchor(initialLayout.rows, initialPage150ScrollTop)!;
+      expect(captured.pageNumber).toBe(150);
+      expect(captured.offsetWithinRow).toBeCloseTo(0.3, 2);
+
+      const session: TabSession = {
+        id: 'tab-deep-anchor',
+        filePath: 'E:\\Docs\\long-book.pdf',
+        fileName: 'long-book.pdf',
+        docHash: 'hash400',
+        fileSize: 8192,
+        status: 'ready',
+        passwordError: null,
+        errorMessage: null,
+        totalPages,
+        currentPage: 150,
+        scrollOffsetRatio: initialScrollRatio,
+        viewMode: 'continuous',
+        coverOffset: true,
+        zoomMode: 'fit-width',
+        zoomScale: 1.0,
+        pageDimensions: dims,
+        outline: [],
+        expandedTocIds: null,
+        navigationRequest: null,
+      };
+
+      const fakePdfDoc = {
+        getPage: vi.fn(async () => ({
+          getViewport: ({ scale }: { scale: number }) => ({
+            width: 612 * scale,
+            height: 792 * scale,
+          }),
+          render: () => ({ promise: Promise.resolve(), cancel: vi.fn() }),
+          getAnnotations: async () => [],
+          cleanup: vi.fn(),
+        })),
+      } as unknown as PDFDocumentProxy;
+
+      const onPageChange = vi.fn();
+
+      render(
+        <PdfViewport
+          session={session}
+          pdfDoc={fakePdfDoc}
+          onPageChange={onPageChange}
+          onScrollRatioChange={vi.fn()}
+          onWheelZoom={vi.fn()}
+          onComputedScaleChange={vi.fn()}
+          onNavigateToPage={vi.fn()}
+        />,
+      );
+
+      const scrollContainer = screen.getByLabelText('PDF document viewport');
+      expect(Math.abs(scrollContainer.scrollTop - initialPage150ScrollTop)).toBeLessThanOrEqual(2);
+
+      // Resize window narrower (1120 -> 780) and resize sidebar open/wider (780 -> 1360)
+      for (const nextW of [780, 928, 1360, 848]) {
+        act(() => {
+          mockWidth = nextW;
+          observedCallback?.([], {} as ResizeObserver);
+        });
+
+        const nextScale = computeScaleForZoomMode('fit-width', 1.0, {
+          viewportWidth: nextW,
+          viewportHeight: 776,
+          page: dims[0]!,
+        });
+        const nextLayout = computeRowLayouts(rows, dims, nextScale, {
+          pageGap: 18,
+          verticalPadding: 24,
+          spreadGap: 16,
+        });
+        const expectedTop = resolveScrollTopForAnchor(nextLayout.rows, captured);
+        expect(Math.abs(scrollContainer.scrollTop - expectedTop)).toBeLessThanOrEqual(3);
+
+        const visible = findVisibleRowRange(nextLayout.rows, scrollContainer.scrollTop, 776, 2);
+        expect(visible.renderedPages).toContain(150);
+      }
+
+      // Page must never have jumped to a completely different page
+      expect(onPageChange).not.toHaveBeenCalled();
     });
   });
 });

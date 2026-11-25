@@ -69,6 +69,7 @@ function toReadingStatePayload(tab: TabSession): DocumentReadingState | null {
     coverOffset: tab.coverOffset,
     zoomMode: tab.zoomMode,
     zoomScale: tab.zoomScale,
+    ...(tab.expandedTocIds !== null ? { expandedTocIds: tab.expandedTocIds } : {}),
     updatedAtMs: Date.now(),
   };
 }
@@ -199,6 +200,10 @@ export default function App() {
           ? savedState.zoomMode
           : curSettings.defaultZoomMode;
         const restoredZoomScale = savedState ? savedState.zoomScale : 1.0;
+        const restoredExpandedTocIds =
+          savedState && savedState.expandedTocIds !== undefined
+            ? savedState.expandedTocIds
+            : null;
 
         setTabs((prev) =>
           prev.map((t) =>
@@ -221,6 +226,7 @@ export default function App() {
                   zoomScale: restoredZoomScale,
                   pageDimensions: handle.initialDimensions,
                   outline: handle.outline,
+                  expandedTocIds: restoredExpandedTocIds,
                 }
               : t,
           ),
@@ -312,6 +318,7 @@ export default function App() {
           zoomScale: 1.0,
           pageDimensions: [],
           outline: [],
+          expandedTocIds: null,
           navigationRequest: null,
         };
 
@@ -381,6 +388,7 @@ export default function App() {
     activeTab?.coverOffset,
     activeTab?.zoomMode,
     activeTab?.zoomScale,
+    activeTab?.expandedTocIds,
   ]);
 
   // Flush reading state on window unload
@@ -793,6 +801,10 @@ export default function App() {
           <SidebarShell
             isOpen={sidebarOpen}
             outline={activeTab.outline}
+            expandedTocIds={activeTab.expandedTocIds}
+            onExpandedTocIdsChange={(ids) =>
+              updateActiveTab((tab) => ({ ...tab, expandedTocIds: ids }))
+            }
             activePanelId={activeSidebarPanel}
             onSelectPanel={setActiveSidebarPanel}
             onSelectDestination={(page, topPt) => navigateToPage(page, topPt)}

@@ -13,6 +13,8 @@ export interface SidebarPanelDefinition {
 interface SidebarShellProps {
   isOpen: boolean;
   outline: OutlineNode[];
+  expandedTocIds?: string[] | null;
+  onExpandedTocIdsChange?: (nextIds: string[]) => void;
   activePanelId: string;
   onSelectPanel: (panelId: string) => void;
   onSelectDestination: (pageNumber: number, topPt: number | null) => void;
@@ -22,6 +24,8 @@ interface SidebarShellProps {
 export function SidebarShell({
   isOpen,
   outline,
+  expandedTocIds,
+  onExpandedTocIdsChange,
   activePanelId,
   onSelectPanel,
   onSelectDestination,
@@ -37,6 +41,8 @@ export function SidebarShell({
       render: () => (
         <TocPanel
           outline={outline}
+          expandedIds={expandedTocIds}
+          onExpandedIdsChange={onExpandedTocIdsChange}
           onSelectDestination={onSelectDestination}
         />
       ),

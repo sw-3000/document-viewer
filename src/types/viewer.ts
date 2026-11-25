@@ -23,6 +23,7 @@ export interface DocumentReadingState {
   coverOffset: boolean;
   zoomMode: ZoomMode;
   zoomScale: number;
+  expandedTocIds?: string[] | null;
   updatedAtMs: number;
 }
 
@@ -105,6 +106,7 @@ export interface TabSession {
   zoomScale: number;
   pageDimensions: PageDimension[];
   outline: OutlineNode[];
+  expandedTocIds: string[] | null;
   /** Incrementing token to jump/scroll to a target page + optional PDF point Y or page % */
   navigationRequest: {
     seq: number;

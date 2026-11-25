@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import type {
   PageDimension,
@@ -9,10 +16,13 @@ import type {
 } from '../types/viewer';
 import {
   buildVisibleRowsForMode,
+  captureScrollAnchor,
   computeRowLayouts,
   computeScrollOffsetRatio,
   computeScrollTopFromRatio,
   findVisibleRowRange,
+  resolveScrollTopForAnchor,
+  type ScrollAnchor,
 } from '../lib/virtualization';
 import { CSS_UNITS, clampScale, computeScaleForZoomMode } from '../lib/zoom';
 import { PdfPageCanvas } from './PdfPageCanvas';
@@ -67,6 +77,35 @@ export function PdfViewport({
 
   const restoredInitialScrollRef = useRef<string | null>(null);
   const lastNavSeqRef = useRef<number>(0);
+  const scrollAnchorRef = useRef<ScrollAnchor | null>(null);
+  const isRestoringScrollRef = useRef(false);
+  const prevLayoutRef = useRef<{
+    sessionId: string;
+    scale: number;
+    viewMode: ViewMode;
+    totalHeight: number;
+  } | null>(null);
+
+  const applyProgrammaticScrollTop = useCallback(
+    (el: HTMLDivElement, targetTop: number, totalHeight: number) => {
+      const maxScroll = Math.max(0, totalHeight - el.clientHeight);
+      const clampedTop = Math.min(maxScroll, Math.max(0, targetTop));
+      isRestoringScrollRef.current = true;
+      el.scrollTop = clampedTop;
+      setScrollTop(clampedTop);
+
+      const releaseGuard = () => {
+        isRestoringScrollRef.current = false;
+      };
+      if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+        window.requestAnimationFrame(releaseGuard);
+      } else {
+        queueMicrotask(releaseGuard);
+      }
+      return clampedTop;
+    },
+    [],
+  );
 
   // Observe non-scrolling outer wrapper so scrollbar appearance/disappearance
   // can never trigger a ResizeObserver -> zoom -> scrollbar feedback loop.
@@ -175,26 +214,79 @@ export function PdfViewport({
     [layoutMetrics.rows, scrollTop, viewportSize.height],
   );
 
-  // Apply scroll anchor after wheel zoom re-layout
-  useEffect(() => {
+  // Apply cursor-anchored wheel zoom or resize scroll-anchoring synchronously
+  // before paint so resizing the window/sidebar never jumps to a wrong page.
+  useLayoutEffect(() => {
     const el = containerRef.current;
-    const anchor = zoomAnchorRef.current;
-    if (!el || !anchor) return;
-    zoomAnchorRef.current = null;
+    if (!el) return;
 
-    const targetScrollLeft = Math.max(
-      0,
-      anchor.contentXRatio * Math.max(el.scrollWidth, layoutMetrics.maxRowWidth) -
-        anchor.clientOffsetX,
+    const anchor = zoomAnchorRef.current;
+    if (anchor) {
+      zoomAnchorRef.current = null;
+      const targetScrollLeft = Math.max(
+        0,
+        anchor.contentXRatio * Math.max(el.scrollWidth, layoutMetrics.maxRowWidth) -
+          anchor.clientOffsetX,
+      );
+      const targetScrollTop = Math.max(
+        0,
+        anchor.contentYRatio * layoutMetrics.totalHeight - anchor.clientOffsetY,
+      );
+      el.scrollLeft = targetScrollLeft;
+      const applied = applyProgrammaticScrollTop(el, targetScrollTop, layoutMetrics.totalHeight);
+      if (session.viewMode === 'continuous') {
+        scrollAnchorRef.current = captureScrollAnchor(layoutMetrics.rows, applied);
+      }
+      prevLayoutRef.current = {
+        sessionId: session.id,
+        scale: effectiveScale,
+        viewMode: session.viewMode,
+        totalHeight: layoutMetrics.totalHeight,
+      };
+      return;
+    }
+
+    const prev = prevLayoutRef.current;
+    prevLayoutRef.current = {
+      sessionId: session.id,
+      scale: effectiveScale,
+      viewMode: session.viewMode,
+      totalHeight: layoutMetrics.totalHeight,
+    };
+
+    if (
+      session.viewMode !== 'continuous' ||
+      restoredInitialScrollRef.current !== session.id ||
+      !prev ||
+      prev.sessionId !== session.id ||
+      prev.viewMode !== 'continuous'
+    ) {
+      return;
+    }
+
+    if (prev.scale === effectiveScale && prev.totalHeight === layoutMetrics.totalHeight) {
+      return;
+    }
+
+    const activeAnchor =
+      scrollAnchorRef.current ?? { pageNumber: session.currentPage, offsetWithinRow: 0 };
+    const targetTop = resolveScrollTopForAnchor(layoutMetrics.rows, activeAnchor);
+    const applied = applyProgrammaticScrollTop(el, targetTop, layoutMetrics.totalHeight);
+    scrollAnchorRef.current = captureScrollAnchor(layoutMetrics.rows, applied);
+    onScrollRatioChange(
+      computeScrollOffsetRatio(applied, layoutMetrics.totalHeight, el.clientHeight),
     );
-    const targetScrollTop = Math.max(
-      0,
-      anchor.contentYRatio * layoutMetrics.totalHeight - anchor.clientOffsetY,
-    );
-    el.scrollLeft = targetScrollLeft;
-    el.scrollTop = targetScrollTop;
-    setScrollTop(el.scrollTop);
-  }, [layoutMetrics.totalHeight, layoutMetrics.maxRowWidth, effectiveScale]);
+  }, [
+    session.id,
+    session.viewMode,
+    session.currentPage,
+    effectiveScale,
+    layoutMetrics.totalHeight,
+    layoutMetrics.maxRowWidth,
+    layoutMetrics.rows,
+    applyProgrammaticScrollTop,
+    onScrollRatioChange,
+  ]);
 
   // Restore saved scroll position once on document open after viewport measurement
   useEffect(() => {
@@ -203,6 +295,13 @@ export function PdfViewport({
     if (layoutMetrics.totalHeight <= 0) return;
 
     restoredInitialScrollRef.current = session.id;
+    prevLayoutRef.current = {
+      sessionId: session.id,
+      scale: effectiveScale,
+      viewMode: session.viewMode,
+      totalHeight: layoutMetrics.totalHeight,
+    };
+
     if (session.viewMode === 'continuous') {
       if (session.scrollOffsetRatio > 0) {
         const target = computeScrollTopFromRatio(
@@ -210,19 +309,21 @@ export function PdfViewport({
           layoutMetrics.totalHeight,
           el.clientHeight,
         );
-        el.scrollTop = target;
-        setScrollTop(target);
+        const applied = applyProgrammaticScrollTop(el, target, layoutMetrics.totalHeight);
+        scrollAnchorRef.current = captureScrollAnchor(layoutMetrics.rows, applied);
       } else if (session.currentPage > 1) {
         const targetRow = layoutMetrics.rows[session.currentPage - 1];
         if (targetRow) {
           const target = Math.max(0, targetRow.top - VERTICAL_PADDING);
-          el.scrollTop = target;
-          setScrollTop(target);
+          const applied = applyProgrammaticScrollTop(el, target, layoutMetrics.totalHeight);
+          scrollAnchorRef.current = captureScrollAnchor(layoutMetrics.rows, applied);
         }
+      } else {
+        scrollAnchorRef.current = captureScrollAnchor(layoutMetrics.rows, 0);
       }
     } else {
-      el.scrollTop = 0;
-      setScrollTop(0);
+      applyProgrammaticScrollTop(el, 0, layoutMetrics.totalHeight);
+      scrollAnchorRef.current = null;
     }
   }, [
     hasMeasuredViewport,
@@ -230,8 +331,10 @@ export function PdfViewport({
     session.viewMode,
     session.scrollOffsetRatio,
     session.currentPage,
+    effectiveScale,
     layoutMetrics.totalHeight,
     layoutMetrics.rows,
+    applyProgrammaticScrollTop,
   ]);
 
   // Handle explicit jump navigation (TOC, page input, search match, link)
@@ -256,19 +359,16 @@ export function PdfViewport({
             extraOffset = fromTopPt * CSS_UNITS * effectiveScale;
           }
         }
-        const targetTop = Math.max(
-          0,
-          targetRow.top + extraOffset - 16,
-        );
-        el.scrollTo({ top: targetTop, behavior: 'auto' });
-        setScrollTop(targetTop);
+        const targetTop = Math.max(0, targetRow.top + extraOffset - 16);
+        const applied = applyProgrammaticScrollTop(el, targetTop, layoutMetrics.totalHeight);
+        scrollAnchorRef.current = captureScrollAnchor(layoutMetrics.rows, applied);
         onScrollRatioChange(
-          computeScrollOffsetRatio(targetTop, layoutMetrics.totalHeight, el.clientHeight),
+          computeScrollOffsetRatio(applied, layoutMetrics.totalHeight, el.clientHeight),
         );
       }
     } else {
-      el.scrollTop = 0;
-      setScrollTop(0);
+      applyProgrammaticScrollTop(el, 0, layoutMetrics.totalHeight);
+      scrollAnchorRef.current = null;
     }
   }, [
     session.navigationRequest,
@@ -277,16 +377,20 @@ export function PdfViewport({
     layoutMetrics.rows,
     layoutMetrics.totalHeight,
     effectiveScale,
+    applyProgrammaticScrollTop,
     onScrollRatioChange,
   ]);
 
   const handleScroll = useCallback(() => {
     const el = containerRef.current;
     if (!el) return;
+    if (isRestoringScrollRef.current) return;
+
     const nextTop = el.scrollTop;
     setScrollTop(nextTop);
 
     if (session.viewMode === 'continuous') {
+      scrollAnchorRef.current = captureScrollAnchor(layoutMetrics.rows, nextTop);
       const range = findVisibleRowRange(
         layoutMetrics.rows,
         nextTop,
