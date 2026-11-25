@@ -9,7 +9,12 @@
     "build": "node scripts/sync-pdfjs-assets.mjs && tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "version:check": "node scripts/bump-version.mjs --check",
+    "version:patch": "node scripts/bump-version.mjs patch",
+    "version:minor": "node scripts/bump-version.mjs minor",
+    "version:major": "node scripts/bump-version.mjs major",
+    "version:set": "node scripts/bump-version.mjs set"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.4.0",

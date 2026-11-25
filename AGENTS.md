@@ -16,10 +16,13 @@ Vendor-agnostic instructions for agents working on this project.
 - `cargo check --manifest-path src-tauri/Cargo.toml` — Fast-check Rust compilation and types
 - `cargo test --manifest-path src-tauri/Cargo.toml` — Run Rust unit tests (`pdf_io`, `storage`, `win_assoc`)
 - `npm test` — Run frontend Vitest unit & component tests (`vitest run`)
+- `npm run version:check` — Verify `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json` share the same strict SemVer
+- `npm run version:patch` / `version:minor` / `version:major` / `version:set -- <x.y.z>` — Atomically bump SemVer across manifests (`-- --tag` creates an annotated `vX.Y.Z` tag)
 
 ## Repository Structure
 
-- `scripts/` — `sync-pdfjs-assets.mjs` (copies `cmaps`, `iccs`, `standard_fonts`, `wasm` into `public/pdfjs/`) and `generate-icons.mjs` (generates PNG + multi-size Windows `.ico` in `src-tauri/icons/`).
+- `.github/workflows/release.yml` — Windows (`windows-latest`) release workflow triggered on `v*.*.*` tags and `workflow_dispatch`, running full verification gates and publishing NSIS/MSI installers + `SHA256SUMS.txt`.
+- `scripts/` — `sync-pdfjs-assets.mjs` (copies `cmaps`, `iccs`, `standard_fonts`, `wasm` into `public/pdfjs/`), `generate-icons.mjs` (generates PNG + multi-size Windows `.ico` in `src-tauri/icons/`), and `bump-version.mjs` (strict SemVer sync & validation).
 - `src/` — React + TypeScript frontend:
   - `src/lib/` — Pure, framework-free logic (`virtualization.ts`, `zoom.ts`, `searchEngine.ts`)
   - `src/services/` — `tauriBridge.ts` (typed IPC + drag-drop + window APIs), `pdfEngine.ts` (offline PDF.js document/outline/link engine)
