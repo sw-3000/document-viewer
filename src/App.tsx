@@ -88,6 +88,7 @@ export default function App() {
 
   // Sidebar state
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_APP_SETTINGS.sidebarWidth);
   const [activeSidebarPanel, setActiveSidebarPanel] = useState('toc');
 
   // Search state
@@ -129,6 +130,7 @@ export default function App() {
       ]);
       if (!active) return;
       setSettings(loadedSettings);
+      setSidebarWidth(loadedSettings.sidebarWidth);
       setRecentDocuments(recents);
       setSettingsLoaded(true);
     })();
@@ -804,6 +806,11 @@ export default function App() {
             expandedTocIds={activeTab.expandedTocIds}
             onExpandedTocIdsChange={(ids) =>
               updateActiveTab((tab) => ({ ...tab, expandedTocIds: ids }))
+            }
+            width={sidebarWidth}
+            onWidthChange={setSidebarWidth}
+            onWidthCommit={(w) =>
+              handleUpdateSettings({ ...settingsRef.current, sidebarWidth: w })
             }
             activePanelId={activeSidebarPanel}
             onSelectPanel={setActiveSidebarPanel}

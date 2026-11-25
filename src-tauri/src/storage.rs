@@ -4,8 +4,13 @@ use std::io;
 use std::path::Path;
 
 const MAX_RECENT_DOCUMENTS: usize = 500;
+const DEFAULT_SIDEBAR_WIDTH: u32 = 272;
 const SETTINGS_FILE: &str = "settings.json";
 const READING_STATE_FILE: &str = "reading_state.json";
+
+fn default_sidebar_width() -> u32 {
+    DEFAULT_SIDEBAR_WIDTH
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -15,6 +20,8 @@ pub struct AppSettings {
     pub default_zoom_mode: String,
     pub default_cover_offset: bool,
     pub theme: String,
+    #[serde(default = "default_sidebar_width")]
+    pub sidebar_width: u32,
 }
 
 impl Default for AppSettings {
@@ -25,6 +32,7 @@ impl Default for AppSettings {
             default_zoom_mode: "fit-width".to_string(),
             default_cover_offset: true,
             theme: "system".to_string(),
+            sidebar_width: DEFAULT_SIDEBAR_WIDTH,
         }
     }
 }
@@ -192,9 +200,27 @@ mod tests {
             default_zoom_mode: "fit-page".to_string(),
             default_cover_offset: false,
             theme: "dark".to_string(),
+            sidebar_width: 340,
         };
         save_settings_to_dir(&dir, &updated).unwrap();
         assert_eq!(load_settings_from_dir(&dir), updated);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn deserializes_legacy_settings_without_sidebar_width() {
+        let dir = temp_config_dir("legacy_settings");
+        let legacy_json = r#"{
+  "resumeLastPage": false,
+  "defaultViewMode": "single",
+  "defaultZoomMode": "fit-page",
+  "defaultCoverOffset": false,
+  "theme": "dark"
+}"#;
+        fs::write(dir.join(SETTINGS_FILE), legacy_json).unwrap();
+        let loaded = load_settings_from_dir(&dir);
+        assert_eq!(loaded.sidebar_width, DEFAULT_SIDEBAR_WIDTH);
+        assert!(!loaded.resume_last_page);
         let _ = fs::remove_dir_all(&dir);
     }
 
