@@ -47,6 +47,7 @@ export function PdfViewport({
   onComputedScaleChange,
   onNavigateToPage,
 }: PdfViewportProps) {
+  const wrapperRef = useRef<HTMLDivElement | null>(null);
   const internalRef = useRef<HTMLDivElement | null>(null);
   const containerRef = viewportRef ?? internalRef;
   const [viewportSize, setViewportSize] = useState({ width: 900, height: 700 });
@@ -67,26 +68,30 @@ export function PdfViewport({
   const restoredInitialScrollRef = useRef<string | null>(null);
   const lastNavSeqRef = useRef<number>(0);
 
-  // Observe container resize & devicePixelRatio changes (moving between monitors)
+  // Observe non-scrolling outer wrapper so scrollbar appearance/disappearance
+  // can never trigger a ResizeObserver -> zoom -> scrollbar feedback loop.
   useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
+    const wrapper = wrapperRef.current;
+    if (!wrapper) return;
 
     const updateSize = () => {
-      setViewportSize({
-        width: el.clientWidth,
-        height: el.clientHeight,
-      });
-      if (el.clientWidth > 0 && el.clientHeight > 0) {
+      const nextW = Math.floor(wrapper.clientWidth);
+      const nextH = Math.floor(wrapper.clientHeight);
+      if (nextW > 0 && nextH > 0) {
         setHasMeasuredViewport(true);
       }
+      setViewportSize((prev) =>
+        prev.width === nextW && prev.height === nextH
+          ? prev
+          : { width: nextW, height: nextH },
+      );
     };
     updateSize();
 
     const observer = new ResizeObserver(() => {
       updateSize();
     });
-    observer.observe(el);
+    observer.observe(wrapper);
 
     const handleDprChange = () => {
       setDpr(window.devicePixelRatio || 1);
@@ -345,23 +350,27 @@ export function PdfViewport({
 
   return (
     <div
-      ref={containerRef}
-      onScroll={handleScroll}
-      className="relative flex-1 overflow-auto bg-[var(--bg-canvas)] focus:outline-none"
-      tabIndex={0}
-      aria-label="PDF document viewport"
+      ref={wrapperRef}
+      className="relative flex-1 min-w-0 min-h-0 overflow-hidden bg-[var(--bg-canvas)]"
     >
       <div
-        className={
-          isDiscreteSmall
-            ? 'relative mx-auto flex min-h-full items-center justify-center px-6'
-            : 'relative mx-auto px-6'
-        }
-        style={{
-          height: isDiscreteSmall ? undefined : `${layoutMetrics.totalHeight}px`,
-          minWidth: `${Math.max(viewportSize.width, layoutMetrics.maxRowWidth + 48)}px`,
-        }}
+        ref={containerRef}
+        onScroll={handleScroll}
+        className="pdf-scroll-container relative h-full w-full overflow-auto bg-[var(--bg-canvas)] focus:outline-none"
+        tabIndex={0}
+        aria-label="PDF document viewport"
       >
+        <div
+          className={
+            isDiscreteSmall
+              ? 'relative mx-auto flex min-h-full w-full items-center justify-center px-6'
+              : 'relative mx-auto w-full px-6'
+          }
+          style={{
+            height: isDiscreteSmall ? undefined : `${layoutMetrics.totalHeight}px`,
+            minWidth: `${layoutMetrics.maxRowWidth + 48}px`,
+          }}
+        >
         {isDiscreteSmall ? (
           <div className="flex items-center justify-center gap-4 py-6">
             {visibleRowsSlice[0]?.pages.map((pageNum) => {
@@ -412,6 +421,7 @@ export function PdfViewport({
             </div>
           ))
         )}
+        </div>
       </div>
     </div>
   );
