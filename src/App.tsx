@@ -12,12 +12,15 @@ import type {
 } from './types/viewer';
 import {
   DEFAULT_APP_SETTINGS,
+  closeCurrentWindow,
   getStartupFiles,
   inspectPdfFile,
   isWindowFullscreen,
+  isWindowMaximized,
   listRecentDocuments,
   loadReadingState,
   loadSettings,
+  minimizeCurrentWindow,
   pickPdfFiles,
   readPdfBytes,
   removeRecentDocument,
@@ -27,6 +30,8 @@ import {
   setWindowTitle,
   spawnNewWindow,
   subscribeToFileDrop,
+  subscribeWindowMaximizedChange,
+  toggleMaximizeCurrentWindow,
 } from './services/tauriBridge';
 import {
   PdfLoadError,
@@ -102,6 +107,7 @@ export default function App() {
 
   // Fullscreen & chrome auto-hide state
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isMaximized, setIsMaximized] = useState(false);
   const [chromePeek, setChromePeek] = useState(false);
   const [windowError, setWindowError] = useState<string | null>(null);
 
@@ -147,6 +153,24 @@ export default function App() {
       : 'Document Viewer';
     void setWindowTitle(title);
   }, [activeTab?.fileName]);
+
+  // Keep Maximize/Restore icon synced with native window state
+  useEffect(() => {
+    let active = true;
+    let unlisten: (() => void) | undefined;
+    void isWindowMaximized().then((max) => {
+      if (active) setIsMaximized(max);
+    });
+    void subscribeWindowMaximizedChange((max) => {
+      if (active) setIsMaximized(max);
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, []);
 
   const handleUpdateSettings = useCallback((next: AppSettings) => {
     setSettings(next);
@@ -760,6 +784,7 @@ export default function App() {
             sidebarOpen={sidebarOpen}
             searchOpen={searchOpen}
             isFullscreen={isFullscreen}
+            isMaximized={isMaximized}
             onOpenFile={() => void handleOpenPicker()}
             onToggleSidebar={() => setSidebarOpen((v) => !v)}
             onJumpToPage={(p) => navigateToPage(p)}
@@ -798,6 +823,13 @@ export default function App() {
             }}
             onToggleFullscreen={() => void toggleFullscreen()}
             onOpenSettings={() => setSettingsOpen(true)}
+            onMinimizeWindow={() => void minimizeCurrentWindow()}
+            onToggleMaximizeWindow={() =>
+              void toggleMaximizeCurrentWindow().then(() =>
+                isWindowMaximized().then(setIsMaximized),
+              )
+            }
+            onCloseWindow={() => void closeCurrentWindow()}
           />
 
           <TabStrip

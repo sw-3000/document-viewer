@@ -83,6 +83,7 @@ pub async fn spawn_new_window(
         .inner_size(1120.0, 820.0)
         .min_inner_size(640.0, 480.0)
         .resizable(true)
+        .decorations(false)
         .shadow(true)
         .build();
 

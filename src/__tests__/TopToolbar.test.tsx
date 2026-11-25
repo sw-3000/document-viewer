@@ -124,4 +124,77 @@ describe('TopToolbar dropdown dismissal and accessibility', () => {
     expect(onChangeZoomMode).toHaveBeenCalledWith('fit-page');
     expect(screen.queryByRole('menu', { name: 'Zoom Presets' })).not.toBeInTheDocument();
   });
+
+  it('renders merged Windows caption controls and drag regions cleanly', () => {
+    const onMinimizeWindow = vi.fn();
+    const onToggleMaximizeWindow = vi.fn();
+    const onCloseWindow = vi.fn();
+
+    const { rerender } = render(
+      <TopToolbar
+        session={makeReadySession()}
+        effectiveScale={1.0}
+        sidebarOpen={false}
+        searchOpen={false}
+        isFullscreen={false}
+        isMaximized={false}
+        onOpenFile={vi.fn()}
+        onToggleSidebar={vi.fn()}
+        onJumpToPage={vi.fn()}
+        onPrevPage={vi.fn()}
+        onNextPage={vi.fn()}
+        onChangeViewMode={vi.fn()}
+        onToggleCoverOffset={vi.fn()}
+        onChangeZoomMode={vi.fn()}
+        onZoomStep={vi.fn()}
+        onToggleSearch={vi.fn()}
+        onToggleFullscreen={vi.fn()}
+        onOpenSettings={vi.fn()}
+        onMinimizeWindow={onMinimizeWindow}
+        onToggleMaximizeWindow={onToggleMaximizeWindow}
+        onCloseWindow={onCloseWindow}
+      />,
+    );
+
+    const header = screen.getByRole('banner');
+    expect(header).toHaveAttribute('data-tauri-drag-region');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Minimize' }));
+    expect(onMinimizeWindow).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Maximize' }));
+    expect(onToggleMaximizeWindow).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(onCloseWindow).toHaveBeenCalledTimes(1);
+
+    // When maximized, button switches to Restore label
+    rerender(
+      <TopToolbar
+        session={makeReadySession()}
+        effectiveScale={1.0}
+        sidebarOpen={false}
+        searchOpen={false}
+        isFullscreen={false}
+        isMaximized={true}
+        onOpenFile={vi.fn()}
+        onToggleSidebar={vi.fn()}
+        onJumpToPage={vi.fn()}
+        onPrevPage={vi.fn()}
+        onNextPage={vi.fn()}
+        onChangeViewMode={vi.fn()}
+        onToggleCoverOffset={vi.fn()}
+        onChangeZoomMode={vi.fn()}
+        onZoomStep={vi.fn()}
+        onToggleSearch={vi.fn()}
+        onToggleFullscreen={vi.fn()}
+        onOpenSettings={vi.fn()}
+        onMinimizeWindow={onMinimizeWindow}
+        onToggleMaximizeWindow={onToggleMaximizeWindow}
+        onCloseWindow={onCloseWindow}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Restore' })).toBeInTheDocument();
+  });
 });

@@ -99,6 +99,10 @@ describe('SettingsDialog, EmptyState, and Keyboard Shortcuts', () => {
     fireEvent.click(screen.getByRole('button', { name: /Open PDF\.\.\./i }));
     expect(onOpenFile).toHaveBeenCalledTimes(1);
 
+    // Start screen stays minimal with no keyboard shortcut cheat-sheet
+    expect(screen.queryByText('Ctrl+O')).not.toBeInTheDocument();
+    expect(screen.queryByText('F11')).not.toBeInTheDocument();
+
     expect(screen.getByText('Guide.pdf')).toBeInTheDocument();
     expect(screen.getByText('File moved or deleted')).toBeInTheDocument();
 

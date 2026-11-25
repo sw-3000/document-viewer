@@ -59,6 +59,36 @@ export async function closeCurrentWindow(): Promise<void> {
   await getCurrentWindow().close();
 }
 
+export async function minimizeCurrentWindow(): Promise<void> {
+  if (!isTauriRuntime()) return;
+  await getCurrentWindow().minimize();
+}
+
+export async function toggleMaximizeCurrentWindow(): Promise<void> {
+  if (!isTauriRuntime()) return;
+  await getCurrentWindow().toggleMaximize();
+}
+
+export async function isWindowMaximized(): Promise<boolean> {
+  if (!isTauriRuntime()) return false;
+  return getCurrentWindow().isMaximized();
+}
+
+export async function subscribeWindowMaximizedChange(
+  onChange: (maximized: boolean) => void,
+): Promise<() => void> {
+  if (!isTauriRuntime()) return () => {};
+  const win = getCurrentWindow();
+  const unlisten = await win.onResized(async () => {
+    try {
+      onChange(await win.isMaximized());
+    } catch {
+      // Ignore errors if window is closing
+    }
+  });
+  return unlisten;
+}
+
 export interface DragDropCallbacks {
   onEnter: () => void;
   onLeave: () => void;
