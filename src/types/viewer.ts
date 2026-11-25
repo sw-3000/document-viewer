@@ -105,11 +105,12 @@ export interface TabSession {
   zoomScale: number;
   pageDimensions: PageDimension[];
   outline: OutlineNode[];
-  /** Incrementing token to jump/scroll to a target page + optional PDF point Y */
+  /** Incrementing token to jump/scroll to a target page + optional PDF point Y or page % */
   navigationRequest: {
     seq: number;
     pageNumber: number;
     scrollOffsetRatio?: number;
     topPt?: number | null;
+    topPct?: number | null;
   } | null;
 }

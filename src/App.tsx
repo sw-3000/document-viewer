@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2, Upload } from 'lucide-react';
 import type {
   AppSettings,
   PageDimension,
+  SearchMatch,
   TabSession,
   ViewMode,
   ZoomMode,
@@ -11,9 +12,12 @@ import {
   DEFAULT_APP_SETTINGS,
   getStartupFiles,
   inspectPdfFile,
+  isWindowFullscreen,
   pickPdfFiles,
   readPdfBytes,
+  setWindowFullscreen,
   setWindowTitle,
+  spawnNewWindow,
   subscribeToFileDrop,
 } from './services/tauriBridge';
 import {
@@ -22,10 +26,21 @@ import {
   loadPdfDocument,
   type LoadedPdfHandle,
 } from './services/pdfEngine';
+import { findSpreadForPage } from './lib/virtualization';
 import { stepZoom } from './lib/zoom';
+import {
+  extractPageTextData,
+  findMatchesInPageText,
+  wrapMatchIndex,
+  type PageTextData,
+} from './lib/searchEngine';
 import { useTheme } from './hooks/useTheme';
+import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { TopToolbar } from './components/TopToolbar';
+import { TabStrip } from './components/TabStrip';
 import { PdfViewport } from './components/PdfViewport';
+import { SidebarShell } from './components/Sidebar/SidebarShell';
+import { SearchBar } from './components/SearchBar';
 import { PasswordDialog } from './components/PasswordDialog';
 import { EmptyState } from './components/EmptyState';
 import { ErrorState } from './components/ErrorState';
@@ -41,8 +56,26 @@ export default function App() {
   const [effectiveScale, setEffectiveScale] = useState(1.0);
   const [isDraggingOver, setIsDraggingOver] = useState(false);
 
+  // Sidebar state
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [activeSidebarPanel, setActiveSidebarPanel] = useState('toc');
+
+  // Search state
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [caseSensitive, setCaseSensitive] = useState(false);
+  const [searchMatches, setSearchMatches] = useState<SearchMatch[]>([]);
+  const [activeMatchIndex, setActiveMatchIndex] = useState(-1);
+  const [isSearchIndexing, setIsSearchIndexing] = useState(false);
+  const [searchFocusTrigger, setSearchFocusTrigger] = useState(0);
+
+  // Fullscreen & chrome auto-hide state
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [chromePeek, setChromePeek] = useState(false);
+
   const handlesRef = useRef<Map<string, LoadedPdfHandle>>(new Map());
   const backfillAbortRef = useRef<Map<string, AbortController>>(new Map());
+  const textCacheRef = useRef<Map<string, Map<number, PageTextData>>>(new Map());
   const tabsRef = useRef<TabSession[]>(tabs);
   tabsRef.current = tabs;
 
@@ -58,6 +91,7 @@ export default function App() {
   const disposeTabResources = useCallback((tabId: string) => {
     backfillAbortRef.current.get(tabId)?.abort();
     backfillAbortRef.current.delete(tabId);
+    textCacheRef.current.delete(tabId);
     const handle = handlesRef.current.get(tabId);
     if (handle) {
       handlesRef.current.delete(tabId);
@@ -220,6 +254,14 @@ export default function App() {
     [disposeTabResources],
   );
 
+  const popOutTab = useCallback(
+    async (tab: TabSession) => {
+      await spawnNewWindow(tab.filePath);
+      closeTab(tab.id);
+    },
+    [closeTab],
+  );
+
   // Load startup files passed via CLI args (or spawned secondary windows)
   useEffect(() => {
     let active = true;
@@ -263,14 +305,17 @@ export default function App() {
     };
   }, [disposeTabResources]);
 
-  const updateActiveTab = useCallback((updater: (tab: TabSession) => TabSession) => {
-    setTabs((prev) =>
-      prev.map((t) => (t.id === activeTabId ? updater(t) : t)),
-    );
-  }, [activeTabId]);
+  const updateActiveTab = useCallback(
+    (updater: (tab: TabSession) => TabSession) => {
+      setTabs((prev) =>
+        prev.map((t) => (t.id === activeTabId ? updater(t) : t)),
+      );
+    },
+    [activeTabId],
+  );
 
   const navigateToPage = useCallback(
-    (pageNumber: number, topPt?: number | null) => {
+    (pageNumber: number, topPt?: number | null, topPct?: number | null) => {
       updateActiveTab((tab) => {
         const clamped = Math.min(Math.max(1, pageNumber), Math.max(1, tab.totalPages));
         const nextSeq = (tab.navigationRequest?.seq ?? 0) + 1;
@@ -281,6 +326,7 @@ export default function App() {
             seq: nextSeq,
             pageNumber: clamped,
             topPt: topPt ?? null,
+            topPct: topPct ?? null,
           },
         };
       });
@@ -288,47 +334,341 @@ export default function App() {
     [updateActiveTab],
   );
 
+  const stepPage = useCallback(
+    (delta: 1 | -1) => {
+      if (!activeTab || activeTab.status !== 'ready') return;
+      if (activeTab.viewMode === 'two-page') {
+        const { spreadIndex, spreads } = findSpreadForPage(
+          activeTab.currentPage,
+          activeTab.totalPages,
+          activeTab.coverOffset,
+        );
+        const nextSpread = spreads[spreadIndex + delta];
+        if (nextSpread && nextSpread[0]) {
+          navigateToPage(nextSpread[0]);
+        }
+      } else {
+        navigateToPage(activeTab.currentPage + delta);
+      }
+    },
+    [activeTab, navigateToPage],
+  );
+
+  // Lazy chunked text search across active document
+  useEffect(() => {
+    if (!searchOpen || !activeTab || activeTab.status !== 'ready') {
+      setSearchMatches([]);
+      setActiveMatchIndex(-1);
+      setIsSearchIndexing(false);
+      return;
+    }
+
+    const trimmed = searchQuery.trim();
+    if (!trimmed) {
+      setSearchMatches([]);
+      setActiveMatchIndex(-1);
+      setIsSearchIndexing(false);
+      return;
+    }
+
+    const handle = handlesRef.current.get(activeTab.id);
+    if (!handle) return;
+
+    let cancelled = false;
+    setIsSearchIndexing(true);
+
+    let cache = textCacheRef.current.get(activeTab.id);
+    if (!cache) {
+      cache = new Map<number, PageTextData>();
+      textCacheRef.current.set(activeTab.id, cache);
+    }
+
+    const runSearch = async () => {
+      const collected: SearchMatch[] = [];
+      let jumpedToFirst = false;
+
+      for (let p = 1; p <= activeTab.totalPages; p++) {
+        if (cancelled) return;
+        let pageData = cache!.get(p);
+        if (!pageData) {
+          pageData = await extractPageTextData(handle.pdfDoc, p);
+          if (cancelled) return;
+          cache!.set(p, pageData);
+          // Yield periodically so UI stays 60fps on 500+ page books
+          if (p % 4 === 0) {
+            await new Promise((r) => setTimeout(r, 0));
+          }
+        }
+
+        const pageMatches = findMatchesInPageText(pageData, searchQuery, caseSensitive);
+        if (pageMatches.length > 0) {
+          collected.push(...pageMatches);
+          setSearchMatches([...collected]);
+          if (!jumpedToFirst) {
+            jumpedToFirst = true;
+            setActiveMatchIndex(0);
+            const first = pageMatches[0]!;
+            navigateToPage(first.pageNumber, null, first.boxes[0]?.topPct ?? null);
+          }
+        }
+      }
+
+      if (!cancelled) {
+        setSearchMatches(collected);
+        if (collected.length === 0) {
+          setActiveMatchIndex(-1);
+        }
+        setIsSearchIndexing(false);
+      }
+    };
+
+    void runSearch();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    searchOpen,
+    searchQuery,
+    caseSensitive,
+    activeTab?.id,
+    activeTab?.status,
+    activeTab?.totalPages,
+  ]);
+
+  const stepSearchMatch = useCallback(
+    (delta: 1 | -1) => {
+      if (searchMatches.length === 0) return;
+      const nextIdx = wrapMatchIndex(activeMatchIndex, delta, searchMatches.length);
+      setActiveMatchIndex(nextIdx);
+      const match = searchMatches[nextIdx];
+      if (match) {
+        navigateToPage(match.pageNumber, null, match.boxes[0]?.topPct ?? null);
+      }
+    },
+    [searchMatches, activeMatchIndex, navigateToPage],
+  );
+
+  const matchesByPage = useMemo(() => {
+    const map = new Map<number, SearchMatch[]>();
+    for (const m of searchMatches) {
+      const list = map.get(m.pageNumber);
+      if (list) {
+        list.push(m);
+      } else {
+        map.set(m.pageNumber, [m]);
+      }
+    }
+    return map;
+  }, [searchMatches]);
+
+  const activeMatch =
+    activeMatchIndex >= 0 && activeMatchIndex < searchMatches.length
+      ? searchMatches[activeMatchIndex] ?? null
+      : null;
+
+  const toggleFullscreen = useCallback(async () => {
+    const current = await isWindowFullscreen().catch(() => isFullscreen);
+    const next = !current;
+    await setWindowFullscreen(next);
+    setIsFullscreen(next);
+    if (!next) setChromePeek(false);
+  }, [isFullscreen]);
+
+  const shortcutHandlers = useMemo(
+    () => ({
+      onOpenFile: () => void handleOpenPicker(),
+      onNewWindow: () => void spawnNewWindow(),
+      onCloseTab: () => {
+        if (activeTab) closeTab(activeTab.id);
+      },
+      onCycleTab: (direction: 1 | -1) => {
+        if (tabs.length < 2 || !activeTabId) return;
+        const idx = tabs.findIndex((t) => t.id === activeTabId);
+        const nextIdx = (((idx + direction) % tabs.length) + tabs.length) % tabs.length;
+        const nextTab = tabs[nextIdx];
+        if (nextTab) setActiveTabId(nextTab.id);
+      },
+      onToggleSidebar: () => {
+        if (activeTab?.status === 'ready') {
+          setSidebarOpen((v) => !v);
+        }
+      },
+      onOpenSearch: () => {
+        if (activeTab?.status === 'ready') {
+          setSearchOpen(true);
+          setSearchFocusTrigger((c) => c + 1);
+        }
+      },
+      onSearchStep: (dir: 1 | -1) => {
+        if (searchOpen) stepSearchMatch(dir);
+      },
+      onZoomIn: () =>
+        updateActiveTab((tab) => ({
+          ...tab,
+          zoomMode: 'custom',
+          zoomScale: stepZoom(effectiveScale, 'in'),
+        })),
+      onZoomOut: () =>
+        updateActiveTab((tab) => ({
+          ...tab,
+          zoomMode: 'custom',
+          zoomScale: stepZoom(effectiveScale, 'out'),
+        })),
+      onZoomActual: () =>
+        updateActiveTab((tab) => ({
+          ...tab,
+          zoomMode: 'actual-size',
+          zoomScale: 1.0,
+        })),
+      onFitWidth: () =>
+        updateActiveTab((tab) => ({ ...tab, zoomMode: 'fit-width' })),
+      onFitPage: () =>
+        updateActiveTab((tab) => ({ ...tab, zoomMode: 'fit-page' })),
+      onPrevPage: () => stepPage(-1),
+      onNextPage: () => stepPage(1),
+      onToggleFullscreen: () => void toggleFullscreen(),
+      onOpenSettings: () => {},
+      onEscape: () => {
+        if (searchOpen) {
+          setSearchOpen(false);
+          setSearchQuery('');
+          setSearchMatches([]);
+          setActiveMatchIndex(-1);
+          return;
+        }
+        if (isFullscreen) {
+          void setWindowFullscreen(false);
+          setIsFullscreen(false);
+          setChromePeek(false);
+        }
+      },
+      isContinuousMode: activeTab?.viewMode === 'continuous',
+    }),
+    [
+      handleOpenPicker,
+      activeTab,
+      tabs,
+      activeTabId,
+      closeTab,
+      searchOpen,
+      stepSearchMatch,
+      updateActiveTab,
+      effectiveScale,
+      stepPage,
+      toggleFullscreen,
+      isFullscreen,
+    ],
+  );
+
+  useKeyboardShortcuts(shortcutHandlers);
+
   const activeHandle = activeTab ? handlesRef.current.get(activeTab.id) ?? null : null;
+  const showChrome = !isFullscreen || chromePeek || searchOpen;
 
   return (
     <div className="relative flex h-screen w-screen flex-col overflow-hidden bg-[var(--bg-canvas)] text-neutral-900 dark:text-neutral-100">
-      <TopToolbar
-        session={activeTab}
-        effectiveScale={effectiveScale}
-        sidebarOpen={false}
-        searchOpen={false}
-        isFullscreen={false}
-        onOpenFile={() => void handleOpenPicker()}
-        onToggleSidebar={() => {}}
-        onJumpToPage={(p) => navigateToPage(p)}
-        onPrevPage={() => activeTab && navigateToPage(activeTab.currentPage - 1)}
-        onNextPage={() => activeTab && navigateToPage(activeTab.currentPage + 1)}
-        onChangeViewMode={(mode: ViewMode) =>
-          updateActiveTab((tab) => ({ ...tab, viewMode: mode }))
-        }
-        onToggleCoverOffset={() =>
-          updateActiveTab((tab) => ({ ...tab, coverOffset: !tab.coverOffset }))
-        }
-        onChangeZoomMode={(mode: ZoomMode, customScale?: number) =>
-          updateActiveTab((tab) => ({
-            ...tab,
-            zoomMode: mode,
-            zoomScale: customScale ?? (mode === 'actual-size' ? 1.0 : effectiveScale),
-          }))
-        }
-        onZoomStep={(dir) =>
-          updateActiveTab((tab) => ({
-            ...tab,
-            zoomMode: 'custom',
-            zoomScale: stepZoom(effectiveScale, dir),
-          }))
-        }
-        onToggleSearch={() => {}}
-        onToggleFullscreen={() => {}}
-        onOpenSettings={() => {}}
-      />
+      {/* Fullscreen top-edge hover reveal zone */}
+      {isFullscreen && (
+        <div
+          className="fixed left-0 right-0 top-0 z-50 h-3"
+          onMouseEnter={() => setChromePeek(true)}
+        />
+      )}
+
+      {showChrome && (
+        <div
+          onMouseLeave={() => {
+            if (isFullscreen) setChromePeek(false);
+          }}
+        >
+          <TopToolbar
+            session={activeTab}
+            effectiveScale={effectiveScale}
+            sidebarOpen={sidebarOpen}
+            searchOpen={searchOpen}
+            isFullscreen={isFullscreen}
+            onOpenFile={() => void handleOpenPicker()}
+            onToggleSidebar={() => setSidebarOpen((v) => !v)}
+            onJumpToPage={(p) => navigateToPage(p)}
+            onPrevPage={() => stepPage(-1)}
+            onNextPage={() => stepPage(1)}
+            onChangeViewMode={(mode: ViewMode) =>
+              updateActiveTab((tab) => ({ ...tab, viewMode: mode }))
+            }
+            onToggleCoverOffset={() =>
+              updateActiveTab((tab) => ({ ...tab, coverOffset: !tab.coverOffset }))
+            }
+            onChangeZoomMode={(mode: ZoomMode, customScale?: number) =>
+              updateActiveTab((tab) => ({
+                ...tab,
+                zoomMode: mode,
+                zoomScale: customScale ?? (mode === 'actual-size' ? 1.0 : effectiveScale),
+              }))
+            }
+            onZoomStep={(dir) =>
+              updateActiveTab((tab) => ({
+                ...tab,
+                zoomMode: 'custom',
+                zoomScale: stepZoom(effectiveScale, dir),
+              }))
+            }
+            onToggleSearch={() => {
+              if (searchOpen) {
+                setSearchOpen(false);
+                setSearchQuery('');
+                setSearchMatches([]);
+                setActiveMatchIndex(-1);
+              } else {
+                setSearchOpen(true);
+                setSearchFocusTrigger((c) => c + 1);
+              }
+            }}
+            onToggleFullscreen={() => void toggleFullscreen()}
+            onOpenSettings={() => {}}
+          />
+
+          <TabStrip
+            tabs={tabs}
+            activeTabId={activeTabId}
+            onSelectTab={setActiveTabId}
+            onCloseTab={closeTab}
+            onPopOutTab={(tab) => void popOutTab(tab)}
+          />
+        </div>
+      )}
 
       <main className="relative flex flex-1 overflow-hidden">
+        {activeTab?.status === 'ready' && (
+          <SidebarShell
+            isOpen={sidebarOpen}
+            outline={activeTab.outline}
+            activePanelId={activeSidebarPanel}
+            onSelectPanel={setActiveSidebarPanel}
+            onSelectDestination={(page, topPt) => navigateToPage(page, topPt)}
+          />
+        )}
+
+        {searchOpen && activeTab?.status === 'ready' && (
+          <SearchBar
+            query={searchQuery}
+            caseSensitive={caseSensitive}
+            totalMatches={searchMatches.length}
+            activeMatchIndex={activeMatchIndex}
+            isIndexing={isSearchIndexing}
+            focusTrigger={searchFocusTrigger}
+            onQueryChange={setSearchQuery}
+            onToggleCaseSensitive={() => setCaseSensitive((v) => !v)}
+            onPrevMatch={() => stepSearchMatch(-1)}
+            onNextMatch={() => stepSearchMatch(1)}
+            onClose={() => {
+              setSearchOpen(false);
+              setSearchQuery('');
+              setSearchMatches([]);
+              setActiveMatchIndex(-1);
+            }}
+          />
+        )}
+
         {!activeTab && (
           <EmptyState
             recentDocuments={[]}
@@ -370,6 +710,8 @@ export default function App() {
           <PdfViewport
             session={activeTab}
             pdfDoc={activeHandle.pdfDoc}
+            matchesByPage={matchesByPage}
+            activeMatch={activeMatch}
             onPageChange={(page) =>
               updateActiveTab((tab) =>
                 tab.currentPage === page ? tab : { ...tab, currentPage: page },
@@ -386,7 +728,7 @@ export default function App() {
               }))
             }
             onComputedScaleChange={setEffectiveScale}
-            onNavigateToPage={navigateToPage}
+            onNavigateToPage={(page, topPt) => navigateToPage(page, topPt)}
           />
         )}
       </main>

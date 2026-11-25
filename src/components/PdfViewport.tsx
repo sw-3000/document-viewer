@@ -234,7 +234,9 @@ export function PdfViewport({
       const targetRow = layoutMetrics.rows[nav.pageNumber - 1];
       if (targetRow) {
         let extraOffset = 0;
-        if (nav.topPt !== null && nav.topPt !== undefined) {
+        if (nav.topPct !== null && nav.topPct !== undefined) {
+          extraOffset = Math.max(0, (nav.topPct / 100) * targetRow.height - 80);
+        } else if (nav.topPt !== null && nav.topPt !== undefined) {
           const dim = session.pageDimensions[nav.pageNumber - 1];
           if (dim) {
             const fromTopPt = Math.max(0, dim.heightPt - nav.topPt);
