@@ -97,6 +97,52 @@ export function buildVisibleRowsForMode(
   return [{ rowIndex: 0, pages: activeSpread }];
 }
 
+/**
+ * Computes ordered page numbers to pre-render in paginated modes (Single Page
+ * and Two Pages) covering the active spread plus `±spreadRadius` adjacent spreads.
+ * Returns `[]` in Continuous mode where virtualized lookahead rows handle pre-rendering.
+ */
+export function getPaginatedPrefetchPages(
+  totalPages: number,
+  viewMode: ViewMode,
+  coverOffset: boolean,
+  currentPage: number,
+  spreadRadius = 1,
+): number[] {
+  if (totalPages <= 0 || viewMode === 'continuous') return [];
+
+  const clampedPage = Math.min(Math.max(1, currentPage), totalPages);
+  const seen = new Set<number>();
+  const ordered: number[] = [];
+
+  const pushUnique = (pages: number[] | undefined) => {
+    if (!pages) return;
+    for (const p of pages) {
+      if (p >= 1 && p <= totalPages && !seen.has(p)) {
+        seen.add(p);
+        ordered.push(p);
+      }
+    }
+  };
+
+  if (viewMode === 'single') {
+    pushUnique([clampedPage]);
+    for (let d = 1; d <= spreadRadius; d++) {
+      pushUnique([clampedPage + d]);
+      pushUnique([clampedPage - d]);
+    }
+    return ordered;
+  }
+
+  const { spreadIndex, spreads } = findSpreadForPage(clampedPage, totalPages, coverOffset);
+  pushUnique(spreads[spreadIndex]);
+  for (let d = 1; d <= spreadRadius; d++) {
+    pushUnique(spreads[spreadIndex + d]);
+    pushUnique(spreads[spreadIndex - d]);
+  }
+  return ordered;
+}
+
 export function computeRowLayouts(
   rows: PageRow[],
   pageDimensions: PageDimension[],

@@ -103,10 +103,12 @@ export default function App() {
   // Fullscreen & chrome auto-hide state
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [chromePeek, setChromePeek] = useState(false);
+  const [windowError, setWindowError] = useState<string | null>(null);
 
   const handlesRef = useRef<Map<string, LoadedPdfHandle>>(new Map());
   const backfillAbortRef = useRef<Map<string, AbortController>>(new Map());
   const textCacheRef = useRef<Map<string, Map<number, PageTextData>>>(new Map());
+  const poppingOutIdsRef = useRef<Set<string>>(new Set());
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const tabsRef = useRef<TabSession[]>(tabs);
   tabsRef.current = tabs;
@@ -362,9 +364,19 @@ export default function App() {
 
   const popOutTab = useCallback(
     async (tab: TabSession) => {
-      await flushTabReadingState(tab);
-      await spawnNewWindow(tab.filePath);
-      closeTab(tab.id);
+      if (poppingOutIdsRef.current.has(tab.id)) return;
+      poppingOutIdsRef.current.add(tab.id);
+      setWindowError(null);
+      try {
+        await flushTabReadingState(tab);
+        await spawnNewWindow(tab.filePath);
+        closeTab(tab.id);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        setWindowError(msg || 'Failed to open document in a new window.');
+      } finally {
+        poppingOutIdsRef.current.delete(tab.id);
+      }
     },
     [closeTab, flushTabReadingState],
   );
@@ -912,6 +924,22 @@ export default function App() {
         onUpdateSettings={handleUpdateSettings}
         onClose={() => setSettingsOpen(false)}
       />
+
+      {windowError && (
+        <div
+          role="alert"
+          className="fixed bottom-4 right-4 z-50 flex items-center gap-3 rounded-lg border border-red-500/30 bg-red-50 px-3.5 py-2 text-xs text-red-700 shadow-lg dark:bg-red-950/90 dark:text-red-200"
+        >
+          <span>{windowError}</span>
+          <button
+            type="button"
+            onClick={() => setWindowError(null)}
+            className="rounded px-1.5 py-0.5 font-medium hover:bg-red-500/15"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {isDraggingOver && (
         <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center bg-blue-600/12 backdrop-blur-[2px]">
