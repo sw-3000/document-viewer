@@ -47,30 +47,53 @@ pub fn read_pdf_bytes(path: String) -> Result<tauri::ipc::Response, String> {
     Ok(tauri::ipc::Response::new(bytes))
 }
 
+pub(crate) fn format_window_label(id: u64) -> String {
+    format!("viewer-{id}")
+}
+
+pub(crate) fn normalize_spawn_file_path(file_path: Option<String>) -> Option<String> {
+    let raw = file_path?.trim().to_string();
+    if raw.is_empty() {
+        return None;
+    }
+    let normalized = pdf_io::normalize_windows_path(std::path::Path::new(&raw));
+    Some(normalized.display().to_string())
+}
+
 #[tauri::command]
-pub fn spawn_new_window(
+pub async fn spawn_new_window(
     app: AppHandle,
     state: State<'_, AppState>,
     file_path: Option<String>,
 ) -> Result<(), String> {
     let id = state.next_window_id.fetch_add(1, Ordering::Relaxed);
-    let label = format!("viewer-{id}");
+    let label = format_window_label(id);
+    let normalized_path = normalize_spawn_file_path(file_path);
 
-    if let Some(path) = file_path {
+    if let Some(ref path) = normalized_path {
         let mut map = state
             .pending_startup_files
             .lock()
             .expect("startup files mutex poisoned");
-        map.insert(label.clone(), vec![path]);
+        map.insert(label.clone(), vec![path.clone()]);
     }
 
-    WebviewWindowBuilder::new(&app, &label, WebviewUrl::App("index.html".into()))
+    let build_result = WebviewWindowBuilder::new(&app, &label, WebviewUrl::App("index.html".into()))
         .title("Document Viewer")
         .inner_size(1120.0, 820.0)
         .min_inner_size(640.0, 480.0)
         .resizable(true)
-        .build()
-        .map_err(|e| format!("Failed to open new window: {e}"))?;
+        .shadow(true)
+        .build();
+
+    if let Err(err) = build_result {
+        let mut map = state
+            .pending_startup_files
+            .lock()
+            .expect("startup files mutex poisoned");
+        map.remove(&label);
+        return Err(format!("Failed to open new window: {err}"));
+    }
 
     Ok(())
 }
@@ -175,4 +198,26 @@ pub fn register_default_pdf_viewer() -> Result<FileAssociationStatus, String> {
     let normalized = pdf_io::normalize_windows_path(&exe_path);
     win_assoc::register_and_open_default_apps(&normalized)
         .map_err(|e| format!("Failed to register PDF handler: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn formats_unique_window_labels() {
+        assert_eq!(format_window_label(1), "viewer-1");
+        assert_eq!(format_window_label(42), "viewer-42");
+        assert_ne!(format_window_label(1), format_window_label(2));
+    }
+
+    #[test]
+    fn normalizes_spawn_file_paths_cleanly() {
+        assert_eq!(normalize_spawn_file_path(None), None);
+        assert_eq!(normalize_spawn_file_path(Some("   ".to_string())), None);
+        assert_eq!(
+            normalize_spawn_file_path(Some(r" \\?\E:\Books\Guide.pdf ".to_string())),
+            Some(r"E:\Books\Guide.pdf".to_string())
+        );
+    }
 }

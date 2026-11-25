@@ -21,9 +21,11 @@ import {
   computeScrollOffsetRatio,
   computeScrollTopFromRatio,
   findVisibleRowRange,
+  getPaginatedPrefetchPages,
   resolveScrollTopForAnchor,
   type ScrollAnchor,
 } from '../lib/virtualization';
+import { PageRenderCache } from '../lib/pageRenderCache';
 import { CSS_UNITS, clampScale, computeScaleForZoomMode } from '../lib/zoom';
 import { PdfPageCanvas } from './PdfPageCanvas';
 
@@ -66,6 +68,13 @@ export function PdfViewport({
   const [dpr, setDpr] = useState(() =>
     typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1,
   );
+  const renderCache = useMemo(() => new PageRenderCache(10), [pdfDoc]);
+
+  useEffect(() => {
+    return () => {
+      renderCache.clear();
+    };
+  }, [renderCache]);
 
   // Track pending zoom anchor so Ctrl+Wheel zooms around cursor cleanly
   const zoomAnchorRef = useRef<{
@@ -192,6 +201,50 @@ export function PdfViewport({
   useEffect(() => {
     onComputedScaleChange(effectiveScale);
   }, [effectiveScale, onComputedScaleChange]);
+
+  // Pre-render ±1 adjacent pages/spreads in paginated modes (Single Page / Two Pages)
+  // so page flips blit from cache immediately without placeholder flicker.
+  useEffect(() => {
+    if (session.viewMode === 'continuous' || session.totalPages <= 0) {
+      return;
+    }
+
+    const prefetchPages = getPaginatedPrefetchPages(
+      session.totalPages,
+      session.viewMode,
+      session.coverOffset,
+      session.currentPage,
+      1,
+    );
+    const allowedSet = new Set(prefetchPages);
+    renderCache.prune(allowedSet, effectiveScale, dpr);
+
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      if (cancelled) return;
+      for (const pageNum of prefetchPages) {
+        if (cancelled) return;
+        const dim = session.pageDimensions[pageNum - 1] ??
+          session.pageDimensions[0] ?? { widthPt: 612, heightPt: 792 };
+        void renderCache.prefetch(pdfDoc, pageNum, dim, effectiveScale, dpr);
+      }
+    }, 0);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [
+    pdfDoc,
+    renderCache,
+    session.viewMode,
+    session.totalPages,
+    session.coverOffset,
+    session.currentPage,
+    session.pageDimensions,
+    effectiveScale,
+    dpr,
+  ]);
 
   const layoutMetrics = useMemo(
     () =>
@@ -488,6 +541,7 @@ export function PdfViewport({
                   dimension={dim}
                   scale={effectiveScale}
                   devicePixelRatio={dpr}
+                  renderCache={renderCache}
                   matchesForPage={matchesByPage?.get(pageNum)}
                   activeMatchId={activeMatch?.id}
                   onNavigateToPage={onNavigateToPage}
@@ -516,6 +570,7 @@ export function PdfViewport({
                     dimension={dim}
                     scale={effectiveScale}
                     devicePixelRatio={dpr}
+                    renderCache={session.viewMode !== 'continuous' ? renderCache : undefined}
                     matchesForPage={matchesByPage?.get(pageNum)}
                     activeMatchId={activeMatch?.id}
                     onNavigateToPage={onNavigateToPage}

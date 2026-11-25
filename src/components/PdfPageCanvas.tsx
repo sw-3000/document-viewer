@@ -1,8 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import type { PDFDocumentProxy, PDFPageProxy, RenderTask } from 'pdfjs-dist';
 import type { PageDimension, PdfLinkAnnotation, SearchMatch } from '../types/viewer';
 import { computeHiDpiCanvasSize } from '../lib/zoom';
+import type { PageRenderCache } from '../lib/pageRenderCache';
 import { extractPageLinks } from '../services/pdfEngine';
+
+export const LOADING_PLACEHOLDER_DELAY_MS = 180;
 
 interface PdfPageCanvasProps {
   pdfDoc: PDFDocumentProxy;
@@ -10,6 +13,7 @@ interface PdfPageCanvasProps {
   dimension: PageDimension;
   scale: number;
   devicePixelRatio: number;
+  renderCache?: PageRenderCache;
   matchesForPage?: SearchMatch[];
   activeMatchId?: string | null;
   onNavigateToPage?: (pageNumber: number, topPt?: number | null) => void;
@@ -21,28 +25,134 @@ export function PdfPageCanvas({
   dimension,
   scale,
   devicePixelRatio,
+  renderCache,
   matchesForPage,
   activeMatchId,
   onNavigateToPage,
 }: PdfPageCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const [rendered, setRendered] = useState(false);
+  const [showPlaceholder, setShowPlaceholder] = useState(false);
   const [links, setLinks] = useState<PdfLinkAnnotation[]>([]);
 
   const sizing = computeHiDpiCanvasSize(dimension, scale, devicePixelRatio);
 
-  useEffect(() => {
+  // Synchronous double-buffered blit when cached, or offscreen render with delayed
+  // placeholder (> 180ms) to eliminate page-flip flicker.
+  useLayoutEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
     let cancelled = false;
     let activeTask: RenderTask | null = null;
     let activePage: PDFPageProxy | null = null;
+    let offscreenCanvas: HTMLCanvasElement | null = null;
+    let placeholderTimer: number | null = null;
 
-    setRendered(false);
+    const clearPlaceholderTimer = () => {
+      if (placeholderTimer !== null) {
+        window.clearTimeout(placeholderTimer);
+        placeholderTimer = null;
+      }
+    };
+
+    const cached = renderCache?.get(pageNumber, scale, devicePixelRatio) ?? null;
+    if (cached) {
+      canvas.width = cached.width;
+      canvas.height = cached.height;
+      const ctx = canvas.getContext('2d', { alpha: false });
+      if (ctx) {
+        ctx.drawImage(cached, 0, 0);
+      }
+      setShowPlaceholder(false);
+
+      // Lazily populate interactive internal links without touching the rendered bitmap
+      void (async () => {
+        try {
+          const page = await pdfDoc.getPage(pageNumber);
+          if (cancelled) {
+            page.cleanup();
+            return;
+          }
+          activePage = page;
+          const pageLinks = await extractPageLinks(pdfDoc, page);
+          if (!cancelled) {
+            setLinks(pageLinks);
+          }
+        } catch {
+          // Ignore link extraction failures
+        }
+      })();
+
+      return () => {
+        cancelled = true;
+        if (activePage) {
+          try {
+            activePage.cleanup();
+          } catch {
+            // Ignore cleanup error
+          }
+        }
+        canvas.width = 0;
+        canvas.height = 0;
+      };
+    }
+
+    const { pixelWidth, pixelHeight, renderScale } = computeHiDpiCanvasSize(
+      dimension,
+      scale,
+      devicePixelRatio,
+    );
+
+    canvas.width = pixelWidth;
+    canvas.height = pixelHeight;
+    const visibleCtx = canvas.getContext('2d', { alpha: false });
+    if (visibleCtx) {
+      visibleCtx.fillStyle = '#ffffff';
+      visibleCtx.fillRect(0, 0, pixelWidth, pixelHeight);
+    }
+
+    setShowPlaceholder(false);
+    placeholderTimer = window.setTimeout(() => {
+      if (!cancelled) {
+        setShowPlaceholder(true);
+      }
+    }, LOADING_PLACEHOLDER_DELAY_MS);
 
     const renderPage = async () => {
       try {
+        if (renderCache) {
+          const completed = await renderCache.prefetch(
+            pdfDoc,
+            pageNumber,
+            dimension,
+            scale,
+            devicePixelRatio,
+          );
+          if (cancelled) return;
+          clearPlaceholderTimer();
+          if (completed) {
+            canvas.width = completed.width;
+            canvas.height = completed.height;
+            const ctx = canvas.getContext('2d', { alpha: false });
+            if (ctx) {
+              ctx.drawImage(completed, 0, 0);
+            }
+          }
+          setShowPlaceholder(false);
+
+          const page = await pdfDoc.getPage(pageNumber);
+          if (cancelled) {
+            page.cleanup();
+            return;
+          }
+          activePage = page;
+          const pageLinks = await extractPageLinks(pdfDoc, page);
+          if (!cancelled) {
+            setLinks(pageLinks);
+          }
+          return;
+        }
+
         const page = await pdfDoc.getPage(pageNumber);
         if (cancelled) {
           page.cleanup();
@@ -50,44 +160,56 @@ export function PdfPageCanvas({
         }
         activePage = page;
 
-        const { pixelWidth, pixelHeight, renderScale } = computeHiDpiCanvasSize(
-          dimension,
-          scale,
-          devicePixelRatio,
-        );
+        // Render onto a detached offscreen buffer, then blit atomically onto the visible canvas
+        offscreenCanvas = document.createElement('canvas');
+        offscreenCanvas.width = pixelWidth;
+        offscreenCanvas.height = pixelHeight;
+        const offscreenCtx = offscreenCanvas.getContext('2d', { alpha: false });
+        const targetCanvas = offscreenCtx ? offscreenCanvas : canvas;
+        const targetCtx = offscreenCtx ?? visibleCtx;
+        if (!targetCtx) {
+          clearPlaceholderTimer();
+          if (offscreenCanvas) {
+            offscreenCanvas.width = 0;
+            offscreenCanvas.height = 0;
+            offscreenCanvas = null;
+          }
+          return;
+        }
 
-        canvas.width = pixelWidth;
-        canvas.height = pixelHeight;
-
-        const ctx = canvas.getContext('2d', { alpha: false });
-        if (!ctx) return;
-
-        // Paint crisp white paper base before rendering
-        ctx.fillStyle = '#ffffff';
-        ctx.fillRect(0, 0, pixelWidth, pixelHeight);
+        targetCtx.fillStyle = '#ffffff';
+        targetCtx.fillRect(0, 0, pixelWidth, pixelHeight);
 
         const viewport = page.getViewport({ scale: renderScale });
         activeTask = page.render({
-          canvasContext: ctx,
-          canvas,
+          canvasContext: targetCtx,
+          canvas: targetCanvas,
           viewport,
         });
 
         await activeTask.promise;
-        if (!cancelled) {
-          setRendered(true);
-        }
+        if (cancelled) return;
 
-        // Extract internal PDF links lazily for interactive TOC/cross-reference clicks
+        clearPlaceholderTimer();
+        if (offscreenCtx && visibleCtx && offscreenCanvas) {
+          visibleCtx.drawImage(offscreenCanvas, 0, 0);
+        }
+        if (offscreenCanvas) {
+          offscreenCanvas.width = 0;
+          offscreenCanvas.height = 0;
+          offscreenCanvas = null;
+        }
+        setShowPlaceholder(false);
+
         const pageLinks = await extractPageLinks(pdfDoc, page);
         if (!cancelled) {
           setLinks(pageLinks);
         }
       } catch (err: unknown) {
         const e = err as { name?: string };
+        clearPlaceholderTimer();
         if (e?.name !== 'RenderingCancelledException' && !cancelled) {
-          // Keep page box visible even if a single complex page errors
-          setRendered(true);
+          setShowPlaceholder(false);
         }
       }
     };
@@ -96,6 +218,7 @@ export function PdfPageCanvas({
 
     return () => {
       cancelled = true;
+      clearPlaceholderTimer();
       if (activeTask) {
         try {
           activeTask.cancel();
@@ -110,11 +233,24 @@ export function PdfPageCanvas({
           // Ignore cleanup error
         }
       }
+      if (offscreenCanvas) {
+        offscreenCanvas.width = 0;
+        offscreenCanvas.height = 0;
+        offscreenCanvas = null;
+      }
       // Explicitly release GPU backing bitmap on eviction
       canvas.width = 0;
       canvas.height = 0;
     };
-  }, [pdfDoc, pageNumber, dimension.widthPt, dimension.heightPt, scale, devicePixelRatio]);
+  }, [
+    pdfDoc,
+    pageNumber,
+    dimension.widthPt,
+    dimension.heightPt,
+    scale,
+    devicePixelRatio,
+    renderCache,
+  ]);
 
   return (
     <div
@@ -134,7 +270,7 @@ export function PdfPageCanvas({
         }}
       />
 
-      {!rendered && (
+      {showPlaceholder && (
         <div
           aria-hidden="true"
           className="pointer-events-none absolute inset-0 flex items-center justify-center bg-white/80 text-xs font-medium text-neutral-400"
