@@ -24,6 +24,7 @@ interface TopToolbarProps {
   sidebarOpen: boolean;
   searchOpen: boolean;
   isFullscreen: boolean;
+  isMaximized?: boolean;
   onOpenFile: () => void;
   onToggleSidebar: () => void;
   onJumpToPage: (page: number) => void;
@@ -36,6 +37,9 @@ interface TopToolbarProps {
   onToggleSearch: () => void;
   onToggleFullscreen: () => void;
   onOpenSettings: () => void;
+  onMinimizeWindow?: () => void;
+  onToggleMaximizeWindow?: () => void;
+  onCloseWindow?: () => void;
 }
 
 export function TopToolbar({
@@ -44,6 +48,7 @@ export function TopToolbar({
   sidebarOpen,
   searchOpen,
   isFullscreen,
+  isMaximized = false,
   onOpenFile,
   onToggleSidebar,
   onJumpToPage,
@@ -56,6 +61,9 @@ export function TopToolbar({
   onToggleSearch,
   onToggleFullscreen,
   onOpenSettings,
+  onMinimizeWindow,
+  onToggleMaximizeWindow,
+  onCloseWindow,
 }: TopToolbarProps) {
   const hasReadyDoc = session !== null && session.status === 'ready';
   const [pageInput, setPageInput] = useState(session ? String(session.currentPage) : '');
@@ -142,9 +150,12 @@ export function TopToolbar({
         : formatZoomPercent(effectiveScale);
 
   return (
-    <header className="relative z-30 flex h-11 shrink-0 items-center justify-between gap-2 border-b border-[var(--border-subtle)] bg-[var(--bg-surface)] px-2.5 backdrop-blur-md">
+    <header
+      data-tauri-drag-region
+      className="relative z-30 flex h-11 shrink-0 items-center border-b border-[var(--border-subtle)] bg-[var(--bg-surface)] pl-2.5 pr-0 backdrop-blur-md"
+    >
       {/* Left group: Sidebar + Open */}
-      <div className="flex items-center gap-1">
+      <div className="flex shrink-0 items-center gap-1">
         <button
           type="button"
           onClick={onToggleSidebar}
@@ -173,9 +184,12 @@ export function TopToolbar({
         </button>
       </div>
 
-      {/* Center group: Page Navigation + View Mode + Zoom */}
+      {/* Left flexible drag region */}
+      <div data-tauri-drag-region className="h-full min-w-2 flex-1" />
+
+      {/* Center group: Page Navigation + View Mode + Zoom (or document title) */}
       {hasReadyDoc && session ? (
-        <div className="flex items-center gap-1.5">
+        <div className="flex shrink-0 items-center gap-1.5">
           {/* Page indicator / quick-jump */}
           <div className="flex items-center rounded-md border border-black/8 bg-white/70 px-1 py-0.5 dark:border-white/10 dark:bg-neutral-800/70">
             <button
@@ -394,52 +408,120 @@ export function TopToolbar({
           </div>
         </div>
       ) : (
-        <div className="truncate text-xs font-medium text-neutral-500 dark:text-neutral-400">
+        <div
+          data-tauri-drag-region
+          className="flex h-full items-center truncate px-2 text-xs font-medium text-neutral-500 dark:text-neutral-400"
+        >
           {session ? session.fileName : 'Document Viewer'}
         </div>
       )}
 
-      {/* Right group: Search, Fullscreen, Settings */}
-      <div className="flex items-center gap-1">
-        <button
-          type="button"
-          onClick={onToggleSearch}
-          disabled={!hasReadyDoc}
-          title="Find in Document (Ctrl+F)"
-          aria-label="Find in Document"
-          aria-pressed={searchOpen}
-          className={`rounded-md p-1.5 transition ${
-            searchOpen && hasReadyDoc
-              ? 'bg-black/8 text-neutral-900 dark:bg-white/12 dark:text-white'
-              : 'text-neutral-600 hover:bg-black/5 dark:text-neutral-300 dark:hover:bg-white/8'
-          } disabled:pointer-events-none disabled:opacity-35`}
-        >
-          <Search className="h-4 w-4" />
-        </button>
+      {/* Right flexible drag region */}
+      <div data-tauri-drag-region className="h-full min-w-2 flex-1" />
 
-        <button
-          type="button"
-          onClick={onToggleFullscreen}
-          title={isFullscreen ? 'Exit Fullscreen (Esc / F11)' : 'Fullscreen (F11)'}
-          aria-label="Toggle Fullscreen"
-          className="rounded-md p-1.5 text-neutral-600 transition hover:bg-black/5 dark:text-neutral-300 dark:hover:bg-white/8"
-        >
-          {isFullscreen ? (
-            <Minimize2 className="h-4 w-4" />
-          ) : (
-            <Maximize2 className="h-4 w-4" />
-          )}
-        </button>
+      {/* Right group: Search, Fullscreen, Settings + Windows caption controls */}
+      <div className="flex h-full shrink-0 items-center">
+        <div className="flex items-center gap-1 pr-1.5">
+          <button
+            type="button"
+            onClick={onToggleSearch}
+            disabled={!hasReadyDoc}
+            title="Find in Document (Ctrl+F)"
+            aria-label="Find in Document"
+            aria-pressed={searchOpen}
+            className={`rounded-md p-1.5 transition ${
+              searchOpen && hasReadyDoc
+                ? 'bg-black/8 text-neutral-900 dark:bg-white/12 dark:text-white'
+                : 'text-neutral-600 hover:bg-black/5 dark:text-neutral-300 dark:hover:bg-white/8'
+            } disabled:pointer-events-none disabled:opacity-35`}
+          >
+            <Search className="h-4 w-4" />
+          </button>
 
-        <button
-          type="button"
-          onClick={onOpenSettings}
-          title="Settings (Ctrl+,)"
-          aria-label="Settings"
-          className="rounded-md p-1.5 text-neutral-600 transition hover:bg-black/5 dark:text-neutral-300 dark:hover:bg-white/8"
-        >
-          <Settings className="h-4 w-4" />
-        </button>
+          <button
+            type="button"
+            onClick={onToggleFullscreen}
+            title={isFullscreen ? 'Exit Fullscreen (Esc / F11)' : 'Fullscreen (F11)'}
+            aria-label="Toggle Fullscreen"
+            className="rounded-md p-1.5 text-neutral-600 transition hover:bg-black/5 dark:text-neutral-300 dark:hover:bg-white/8"
+          >
+            {isFullscreen ? (
+              <Minimize2 className="h-4 w-4" />
+            ) : (
+              <Maximize2 className="h-4 w-4" />
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={onOpenSettings}
+            title="Settings (Ctrl+,)"
+            aria-label="Settings"
+            className="rounded-md p-1.5 text-neutral-600 transition hover:bg-black/5 dark:text-neutral-300 dark:hover:bg-white/8"
+          >
+            <Settings className="h-4 w-4" />
+          </button>
+        </div>
+
+        {/* Integrated Windows 11 Caption Controls */}
+        <div className="flex h-full items-stretch border-l border-[var(--border-subtle)]">
+          <button
+            type="button"
+            onClick={onMinimizeWindow}
+            aria-label="Minimize"
+            title="Minimize"
+            className="flex h-full w-11 items-center justify-center text-neutral-700 transition-colors hover:bg-black/6 dark:text-neutral-200 dark:hover:bg-white/10"
+          >
+            <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+              <path d="M1 5h8" stroke="currentColor" strokeWidth="1" />
+            </svg>
+          </button>
+
+          <button
+            type="button"
+            onClick={onToggleMaximizeWindow}
+            aria-label={isMaximized ? 'Restore' : 'Maximize'}
+            title={isMaximized ? 'Restore' : 'Maximize'}
+            className="flex h-full w-11 items-center justify-center text-neutral-700 transition-colors hover:bg-black/6 dark:text-neutral-200 dark:hover:bg-white/10"
+          >
+            {isMaximized ? (
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
+                <path
+                  d="M3 1.5h5.5V7M1.5 3h5.5v5.5H1.5z"
+                  stroke="currentColor"
+                  strokeWidth="1"
+                />
+              </svg>
+            ) : (
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
+                <rect
+                  x="1.5"
+                  y="1.5"
+                  width="7"
+                  height="7"
+                  stroke="currentColor"
+                  strokeWidth="1"
+                />
+              </svg>
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={onCloseWindow}
+            aria-label="Close"
+            title="Close"
+            className="flex h-full w-11 items-center justify-center text-neutral-700 transition-colors hover:bg-[#c42b1c] hover:text-white active:bg-[#b3271a] dark:text-neutral-200"
+          >
+            <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+              <path
+                d="M1.5 1.5l7 7M8.5 1.5l-7 7"
+                stroke="currentColor"
+                strokeWidth="1.1"
+              />
+            </svg>
+          </button>
+        </div>
       </div>
     </header>
   );

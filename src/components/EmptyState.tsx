@@ -38,33 +38,6 @@ export function EmptyState({
           </button>
         </div>
 
-        <div className="mt-4 flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-[11px] text-neutral-400 dark:text-neutral-500">
-          <span>
-            <kbd className="rounded border border-neutral-300 px-1 py-0.5 font-sans dark:border-neutral-700">
-              Ctrl+O
-            </kbd>{' '}
-            Open
-          </span>
-          <span>
-            <kbd className="rounded border border-neutral-300 px-1 py-0.5 font-sans dark:border-neutral-700">
-              Ctrl+F
-            </kbd>{' '}
-            Find
-          </span>
-          <span>
-            <kbd className="rounded border border-neutral-300 px-1 py-0.5 font-sans dark:border-neutral-700">
-              Ctrl+B
-            </kbd>{' '}
-            Sidebar
-          </span>
-          <span>
-            <kbd className="rounded border border-neutral-300 px-1 py-0.5 font-sans dark:border-neutral-700">
-              F11
-            </kbd>{' '}
-            Fullscreen
-          </span>
-        </div>
-
         {recentDocuments.length > 0 && (
           <div className="mt-7 border-t border-black/8 pt-5 text-left dark:border-white/10">
             <div className="mb-2 flex items-center gap-1.5 text-xs font-medium text-neutral-500 dark:text-neutral-400">

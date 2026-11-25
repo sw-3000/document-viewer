@@ -26,6 +26,7 @@ export function TabStrip({
     <div
       role="tablist"
       aria-label="Open documents"
+      data-tauri-drag-region
       className="flex h-8 shrink-0 items-center gap-1 overflow-x-auto border-b border-[var(--border-subtle)] bg-neutral-100/90 px-2 dark:bg-neutral-900/90"
     >
       {tabs.map((tab) => {
