@@ -20,6 +20,7 @@ import { PdfPageCanvas } from './PdfPageCanvas';
 interface PdfViewportProps {
   session: TabSession;
   pdfDoc: PDFDocumentProxy;
+  viewportRef?: React.RefObject<HTMLDivElement | null>;
   matchesByPage?: Map<number, SearchMatch[]>;
   activeMatch?: SearchMatch | null;
   onPageChange: (pageNumber: number) => void;
@@ -37,6 +38,7 @@ const VERTICAL_PADDING = 24;
 export function PdfViewport({
   session,
   pdfDoc,
+  viewportRef,
   matchesByPage,
   activeMatch,
   onPageChange,
@@ -45,7 +47,8 @@ export function PdfViewport({
   onComputedScaleChange,
   onNavigateToPage,
 }: PdfViewportProps) {
-  const containerRef = useRef<HTMLDivElement | null>(null);
+  const internalRef = useRef<HTMLDivElement | null>(null);
+  const containerRef = viewportRef ?? internalRef;
   const [viewportSize, setViewportSize] = useState({ width: 900, height: 700 });
   const [hasMeasuredViewport, setHasMeasuredViewport] = useState(false);
   const [scrollTop, setScrollTop] = useState(0);

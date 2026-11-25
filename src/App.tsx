@@ -105,6 +105,7 @@ export default function App() {
   const handlesRef = useRef<Map<string, LoadedPdfHandle>>(new Map());
   const backfillAbortRef = useRef<Map<string, AbortController>>(new Map());
   const textCacheRef = useRef<Map<string, Map<number, PageTextData>>>(new Map());
+  const viewportRef = useRef<HTMLDivElement | null>(null);
   const tabsRef = useRef<TabSession[]>(tabs);
   tabsRef.current = tabs;
   const settingsRef = useRef<AppSettings>(settings);
@@ -659,6 +660,18 @@ export default function App() {
         updateActiveTab((tab) => ({ ...tab, zoomMode: 'fit-page' })),
       onPrevPage: () => stepPage(-1),
       onNextPage: () => stepPage(1),
+      onScrollStep: (direction: 1 | -1) => {
+        const el = viewportRef.current;
+        if (!el) return;
+        const delta = Math.max(120, Math.round(el.clientHeight * 0.88)) * direction;
+        el.scrollBy({ top: delta, behavior: 'smooth' });
+      },
+      onFirstPage: () => {
+        if (activeTab?.status === 'ready') navigateToPage(1);
+      },
+      onLastPage: () => {
+        if (activeTab?.status === 'ready') navigateToPage(activeTab.totalPages);
+      },
       onToggleFullscreen: () => void toggleFullscreen(),
       onOpenSettings: () => setSettingsOpen(true),
       onEscape: () => {
@@ -850,6 +863,7 @@ export default function App() {
           <PdfViewport
             session={activeTab}
             pdfDoc={activeHandle.pdfDoc}
+            viewportRef={viewportRef}
             matchesByPage={matchesByPage}
             activeMatch={activeMatch}
             onPageChange={(page) =>

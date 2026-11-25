@@ -15,6 +15,9 @@ export interface KeyboardShortcutHandlers {
   onFitPage: () => void;
   onPrevPage: () => void;
   onNextPage: () => void;
+  onScrollStep?: (direction: 1 | -1) => void;
+  onFirstPage?: () => void;
+  onLastPage?: () => void;
   onToggleFullscreen: () => void;
   onOpenSettings: () => void;
   onEscape: () => void;
@@ -84,7 +87,7 @@ export function useKeyboardShortcuts(handlers: KeyboardShortcutHandlers): void {
           handlers.onToggleSidebar();
           return;
         }
-        if (e.key === ',' ) {
+        if (e.key === ',') {
           e.preventDefault();
           handlers.onOpenSettings();
           return;
@@ -118,19 +121,32 @@ export function useKeyboardShortcuts(handlers: KeyboardShortcutHandlers): void {
 
       if (inInput) return;
 
-      // Discrete page/spread navigation with arrows or PageUp/PageDown
-      if (e.key === 'ArrowLeft') {
+      if (e.key === 'Home' && handlers.onFirstPage) {
+        e.preventDefault();
+        handlers.onFirstPage();
+      } else if (e.key === 'End' && handlers.onLastPage) {
+        e.preventDefault();
+        handlers.onLastPage();
+      } else if (e.key === 'ArrowLeft') {
         e.preventDefault();
         handlers.onPrevPage();
       } else if (e.key === 'ArrowRight') {
         e.preventDefault();
         handlers.onNextPage();
-      } else if (!handlers.isContinuousMode && e.key === 'PageUp') {
+      } else if (e.key === 'PageUp') {
         e.preventDefault();
-        handlers.onPrevPage();
-      } else if (!handlers.isContinuousMode && e.key === 'PageDown') {
+        if (handlers.isContinuousMode && handlers.onScrollStep) {
+          handlers.onScrollStep(-1);
+        } else {
+          handlers.onPrevPage();
+        }
+      } else if (e.key === 'PageDown') {
         e.preventDefault();
-        handlers.onNextPage();
+        if (handlers.isContinuousMode && handlers.onScrollStep) {
+          handlers.onScrollStep(1);
+        } else {
+          handlers.onNextPage();
+        }
       }
     };
 
