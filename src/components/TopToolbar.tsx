@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import {
   BookOpen,
   ChevronLeft,
@@ -62,6 +62,11 @@ export function TopToolbar({
   const [viewMenuOpen, setViewMenuOpen] = useState(false);
   const [zoomMenuOpen, setZoomMenuOpen] = useState(false);
 
+  const viewMenuRef = useRef<HTMLDivElement | null>(null);
+  const viewTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const zoomMenuRef = useRef<HTMLDivElement | null>(null);
+  const zoomTriggerRef = useRef<HTMLButtonElement | null>(null);
+
   useEffect(() => {
     if (session) {
       setPageInput(String(session.currentPage));
@@ -69,6 +74,43 @@ export function TopToolbar({
       setPageInput('');
     }
   }, [session?.id, session?.currentPage]);
+
+  // Close open toolbar dropdowns on outside pointerdown (across entire document,
+  // including PDF canvas/sidebar) and on Escape (capturing before global shortcuts).
+  useEffect(() => {
+    if (!viewMenuOpen && !zoomMenuOpen) return;
+
+    const handlePointerDown = (e: PointerEvent) => {
+      const target = e.target as Node | null;
+      if (viewMenuOpen && target && !viewMenuRef.current?.contains(target)) {
+        setViewMenuOpen(false);
+      }
+      if (zoomMenuOpen && target && !zoomMenuRef.current?.contains(target)) {
+        setZoomMenuOpen(false);
+      }
+    };
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (viewMenuOpen) {
+        setViewMenuOpen(false);
+        viewTriggerRef.current?.focus();
+      }
+      if (zoomMenuOpen) {
+        setZoomMenuOpen(false);
+        zoomTriggerRef.current?.focus();
+      }
+    };
+
+    document.addEventListener('pointerdown', handlePointerDown, { capture: true });
+    document.addEventListener('keydown', handleKeyDown, { capture: true });
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown, { capture: true });
+      document.removeEventListener('keydown', handleKeyDown, { capture: true });
+    };
+  }, [viewMenuOpen, zoomMenuOpen]);
 
   const handlePageSubmit = (e: FormEvent) => {
     e.preventDefault();
@@ -175,8 +217,9 @@ export function TopToolbar({
           <div className="mx-0.5 h-4 w-px bg-black/10 dark:bg-white/10" />
 
           {/* View Mode Selector */}
-          <div className="relative">
+          <div ref={viewMenuRef} className="relative">
             <button
+              ref={viewTriggerRef}
               type="button"
               onClick={() => {
                 setViewMenuOpen((v) => !v);
@@ -184,6 +227,8 @@ export function TopToolbar({
               }}
               title="View Mode"
               aria-label="View Mode"
+              aria-haspopup="menu"
+              aria-expanded={viewMenuOpen}
               className="inline-flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium text-neutral-700 hover:bg-black/5 dark:text-neutral-200 dark:hover:bg-white/8"
             >
               {viewModeIcon}
@@ -197,62 +242,65 @@ export function TopToolbar({
             </button>
 
             {viewMenuOpen && (
-              <>
-                <div
-                  className="fixed inset-0 z-40"
-                  onClick={() => setViewMenuOpen(false)}
-                />
-                <div className="absolute left-0 top-full z-50 mt-1 w-48 rounded-lg border border-black/10 bg-white p-1 shadow-lg dark:border-white/10 dark:bg-neutral-900">
-                  {(
-                    [
-                      { id: 'continuous', label: 'Continuous Scroll', icon: Rows3 },
-                      { id: 'single', label: 'Single Page', icon: FileIcon },
-                      { id: 'two-page', label: 'Two Pages', icon: Columns2 },
-                    ] as const
-                  ).map((item) => {
-                    const Icon = item.icon;
-                    const active = session.viewMode === item.id;
-                    return (
-                      <button
-                        key={item.id}
-                        type="button"
-                        onClick={() => {
-                          onChangeViewMode(item.id);
-                          setViewMenuOpen(false);
-                        }}
-                        className={`flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs ${
-                          active
-                            ? 'bg-blue-600/10 font-medium text-blue-600 dark:text-blue-400'
-                            : 'text-neutral-700 hover:bg-neutral-100 dark:text-neutral-200 dark:hover:bg-neutral-800'
-                        }`}
-                      >
-                        <Icon className="h-3.5 w-3.5" />
-                        {item.label}
-                      </button>
-                    );
-                  })}
-
-                  <div className="my-1 h-px bg-black/8 dark:bg-white/10" />
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onToggleCoverOffset();
-                      setViewMenuOpen(false);
-                    }}
-                    className="flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-1.5 text-left text-xs text-neutral-700 hover:bg-neutral-100 dark:text-neutral-200 dark:hover:bg-neutral-800"
-                  >
-                    <span className="flex items-center gap-2">
-                      <BookOpen className="h-3.5 w-3.5" />
-                      Cover Page Offset
-                    </span>
-                    <span
-                      className={`h-2 w-2 rounded-full ${
-                        session.coverOffset ? 'bg-blue-600 dark:bg-blue-400' : 'bg-neutral-300 dark:bg-neutral-600'
+              <div
+                role="menu"
+                aria-label="View Mode Options"
+                className="absolute left-0 top-full z-50 mt-1 w-48 rounded-lg border border-black/10 bg-white p-1 shadow-lg dark:border-white/10 dark:bg-neutral-900"
+              >
+                {(
+                  [
+                    { id: 'continuous', label: 'Continuous Scroll', icon: Rows3 },
+                    { id: 'single', label: 'Single Page', icon: FileIcon },
+                    { id: 'two-page', label: 'Two Pages', icon: Columns2 },
+                  ] as const
+                ).map((item) => {
+                  const Icon = item.icon;
+                  const active = session.viewMode === item.id;
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        onChangeViewMode(item.id);
+                        setViewMenuOpen(false);
+                      }}
+                      className={`flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs ${
+                        active
+                          ? 'bg-blue-600/10 font-medium text-blue-600 dark:text-blue-400'
+                          : 'text-neutral-700 hover:bg-neutral-100 dark:text-neutral-200 dark:hover:bg-neutral-800'
                       }`}
-                    />
-                  </button>
-                </div>
-              </>
+                    >
+                      <Icon className="h-3.5 w-3.5" />
+                      {item.label}
+                    </button>
+                  );
+                })}
+
+                <div className="my-1 h-px bg-black/8 dark:bg-white/10" />
+                <button
+                  type="button"
+                  role="menuitemcheckbox"
+                  aria-checked={session.coverOffset}
+                  onClick={() => {
+                    onToggleCoverOffset();
+                    setViewMenuOpen(false);
+                  }}
+                  className="flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-1.5 text-left text-xs text-neutral-700 hover:bg-neutral-100 dark:text-neutral-200 dark:hover:bg-neutral-800"
+                >
+                  <span className="flex items-center gap-2">
+                    <BookOpen className="h-3.5 w-3.5" />
+                    Cover Page Offset
+                  </span>
+                  <span
+                    className={`h-2 w-2 rounded-full ${
+                      session.coverOffset
+                        ? 'bg-blue-600 dark:bg-blue-400'
+                        : 'bg-neutral-300 dark:bg-neutral-600'
+                    }`}
+                  />
+                </button>
+              </div>
             )}
           </div>
 
@@ -268,65 +316,69 @@ export function TopToolbar({
               <ZoomOut className="h-4 w-4" />
             </button>
 
-            <div className="relative">
+            <div ref={zoomMenuRef} className="relative">
               <button
+                ref={zoomTriggerRef}
                 type="button"
                 onClick={() => {
                   setZoomMenuOpen((v) => !v);
                   setViewMenuOpen(false);
                 }}
                 title="Zoom Options"
+                aria-label="Zoom Options"
+                aria-haspopup="menu"
+                aria-expanded={zoomMenuOpen}
                 className="min-w-[84px] rounded-md px-2 py-1 text-center text-xs font-medium tabular-nums text-neutral-700 hover:bg-black/5 dark:text-neutral-200 dark:hover:bg-white/8"
               >
                 {zoomLabel}
               </button>
 
               {zoomMenuOpen && (
-                <>
-                  <div
-                    className="fixed inset-0 z-40"
-                    onClick={() => setZoomMenuOpen(false)}
-                  />
-                  <div className="absolute right-0 top-full z-50 mt-1 w-44 rounded-lg border border-black/10 bg-white p-1 shadow-lg dark:border-white/10 dark:bg-neutral-900">
-                    {(
-                      [
-                        { mode: 'fit-width', label: 'Fit Width' },
-                        { mode: 'fit-page', label: 'Fit Page' },
-                        { mode: 'actual-size', label: 'Actual Size (100%)' },
-                      ] as const
-                    ).map((opt) => (
-                      <button
-                        key={opt.mode}
-                        type="button"
-                        onClick={() => {
-                          onChangeZoomMode(opt.mode);
-                          setZoomMenuOpen(false);
-                        }}
-                        className={`flex w-full items-center justify-between rounded-md px-2.5 py-1.5 text-left text-xs ${
-                          session.zoomMode === opt.mode
-                            ? 'bg-blue-600/10 font-medium text-blue-600 dark:text-blue-400'
-                            : 'text-neutral-700 hover:bg-neutral-100 dark:text-neutral-200 dark:hover:bg-neutral-800'
-                        }`}
-                      >
-                        {opt.label}
-                      </button>
-                    ))}
-                    <div className="my-1 h-px bg-black/8 dark:bg-white/10" />
-                    {ZOOM_PRESETS.map((preset) => (
-                      <button
-                        key={preset}
-                        type="button"
-                        onClick={() => {
-                          onChangeZoomMode('custom', preset);
-                          setZoomMenuOpen(false);
-                        }}
-                        className="flex w-full items-center justify-between rounded-md px-2.5 py-1 text-left text-xs tabular-nums text-neutral-700 hover:bg-neutral-100 dark:text-neutral-200 dark:hover:bg-neutral-800"
-                      >
-                        {Math.round(preset * 100)}%
-                      </button>
-                    ))}
-                  </div>
-                </>
+                <div
+                  role="menu"
+                  aria-label="Zoom Presets"
+                  className="absolute right-0 top-full z-50 mt-1 w-44 rounded-lg border border-black/10 bg-white p-1 shadow-lg dark:border-white/10 dark:bg-neutral-900"
+                >
+                  {(
+                    [
+                      { mode: 'fit-width', label: 'Fit Width' },
+                      { mode: 'fit-page', label: 'Fit Page' },
+                      { mode: 'actual-size', label: 'Actual Size (100%)' },
+                    ] as const
+                  ).map((opt) => (
+                    <button
+                      key={opt.mode}
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        onChangeZoomMode(opt.mode);
+                        setZoomMenuOpen(false);
+                      }}
+                      className={`flex w-full items-center justify-between rounded-md px-2.5 py-1.5 text-left text-xs ${
+                        session.zoomMode === opt.mode
+                          ? 'bg-blue-600/10 font-medium text-blue-600 dark:text-blue-400'
+                          : 'text-neutral-700 hover:bg-neutral-100 dark:text-neutral-200 dark:hover:bg-neutral-800'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                  <div className="my-1 h-px bg-black/8 dark:bg-white/10" />
+                  {ZOOM_PRESETS.map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        onChangeZoomMode('custom', preset);
+                        setZoomMenuOpen(false);
+                      }}
+                      className="flex w-full items-center justify-between rounded-md px-2.5 py-1 text-left text-xs tabular-nums text-neutral-700 hover:bg-neutral-100 dark:text-neutral-200 dark:hover:bg-neutral-800"
+                    >
+                      {Math.round(preset * 100)}%
+                    </button>
+                  ))}
+                </div>
               )}
             </div>
 

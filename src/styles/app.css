@@ -30,6 +30,10 @@
   }
 }
 
+.pdf-scroll-container {
+  scrollbar-gutter: stable;
+}
+
 /* Native-feeling Windows 11 scrollbar */
 ::-webkit-scrollbar {
   width: 10px;

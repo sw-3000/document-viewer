@@ -6,12 +6,22 @@ export const CSS_UNITS = 96 / 72;
 export const MIN_ZOOM_SCALE = 0.25;
 export const MAX_ZOOM_SCALE = 5.0;
 export const MAX_CANVAS_EDGE_PX = 16384;
+export const SCROLLBAR_GUTTER_PX = 12;
 
 export const ZOOM_PRESETS = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0] as const;
 
 export function clampScale(scale: number): number {
   if (!Number.isFinite(scale)) return 1.0;
   return Math.min(MAX_ZOOM_SCALE, Math.max(MIN_ZOOM_SCALE, Math.round(scale * 1000) / 1000));
+}
+
+/**
+ * Floors scale to 3 decimal places for fit-to-width / fit-to-page so rounding
+ * never overshoots available viewport pixels and triggers scrollbar feedback loops.
+ */
+export function floorScale(scale: number): number {
+  if (!Number.isFinite(scale)) return 1.0;
+  return Math.min(MAX_ZOOM_SCALE, Math.max(MIN_ZOOM_SCALE, Math.floor(scale * 1000) / 1000));
 }
 
 export function stepZoom(currentScale: number, direction: 'in' | 'out'): number {
@@ -45,8 +55,8 @@ export function computeScaleForZoomMode(
   if (mode === 'actual-size') return 1.0;
   if (mode === 'custom') return clampScale(customScale);
 
-  const hPad = input.horizontalPadding ?? 48;
-  const vPad = input.verticalPadding ?? 40;
+  const hPad = input.horizontalPadding ?? 48 + SCROLLBAR_GUTTER_PX;
+  const vPad = input.verticalPadding ?? 40 + SCROLLBAR_GUTTER_PX;
   const gap = input.spreadGap ?? 16;
 
   const availW = Math.max(120, input.viewportWidth - hPad);
@@ -63,11 +73,11 @@ export function computeScaleForZoomMode(
 
   const widthScale = effectiveAvailW / (combinedWidthPt * CSS_UNITS);
   if (mode === 'fit-width') {
-    return clampScale(widthScale);
+    return floorScale(widthScale);
   }
 
   const heightScale = availH / (maxHeightPt * CSS_UNITS);
-  return clampScale(Math.min(widthScale, heightScale));
+  return floorScale(Math.min(widthScale, heightScale));
 }
 
 export interface HiDpiCanvasSize {
