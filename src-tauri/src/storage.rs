@@ -42,6 +42,8 @@ pub struct DocumentReadingState {
     pub cover_offset: bool,
     pub zoom_mode: String,
     pub zoom_scale: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expanded_toc_ids: Option<Vec<String>>,
     pub updated_at_ms: u64,
 }
 
@@ -174,6 +176,7 @@ mod tests {
             cover_offset: true,
             zoom_mode: "fit-width".to_string(),
             zoom_scale: 1.25,
+            expanded_toc_ids: None,
             updated_at_ms: ts,
         }
     }
@@ -230,6 +233,60 @@ mod tests {
         remove_recent_document_from_dir(&dir, "h-509").unwrap();
         let after_remove = list_recent_documents_from_dir(&dir, 5);
         assert_eq!(after_remove[0].state.doc_hash, "h-508");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn deserializes_legacy_reading_state_without_expanded_toc_ids() {
+        let dir = temp_config_dir("legacy_toc");
+        let legacy_json = r#"[
+  {
+    "docHash": "legacy-hash",
+    "filePath": "E:\\Books\\Legacy.pdf",
+    "fileName": "Legacy.pdf",
+    "totalPages": 100,
+    "pageNumber": 12,
+    "scrollOffsetRatio": 0.4,
+    "viewMode": "continuous",
+    "coverOffset": true,
+    "zoomMode": "fit-width",
+    "zoomScale": 1.1,
+    "updatedAtMs": 5000
+  }
+]"#;
+        fs::write(dir.join(READING_STATE_FILE), legacy_json).unwrap();
+        let loaded = load_reading_state_from_dir(&dir, "legacy-hash", r"E:\Books\Legacy.pdf")
+            .expect("legacy state should deserialize");
+        assert_eq!(loaded.page_number, 12);
+        assert_eq!(loaded.expanded_toc_ids, None);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn persists_expanded_toc_ids_including_explicit_empty_list() {
+        let dir = temp_config_dir("toc_persist");
+        let mut with_ids = make_state("toc-1", r"E:\Books\One.pdf", 5, 100);
+        with_ids.expanded_toc_ids = Some(vec!["0".to_string(), "1".to_string(), "1.10".to_string()]);
+        save_reading_state_to_dir(&dir, with_ids).unwrap();
+
+        let loaded_ids = load_reading_state_from_dir(&dir, "toc-1", r"E:\Books\One.pdf")
+            .unwrap()
+            .expanded_toc_ids;
+        assert_eq!(
+            loaded_ids,
+            Some(vec!["0".to_string(), "1".to_string(), "1.10".to_string()])
+        );
+
+        let mut all_collapsed = make_state("toc-2", r"E:\Books\Two.pdf", 8, 200);
+        all_collapsed.expanded_toc_ids = Some(Vec::new());
+        save_reading_state_to_dir(&dir, all_collapsed).unwrap();
+
+        let loaded_empty = load_reading_state_from_dir(&dir, "toc-2", r"E:\Books\Two.pdf")
+            .unwrap()
+            .expanded_toc_ids;
+        assert_eq!(loaded_empty, Some(Vec::new()));
 
         let _ = fs::remove_dir_all(&dir);
     }

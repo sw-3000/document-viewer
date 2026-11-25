@@ -4,19 +4,62 @@ import type { OutlineNode } from '../../types/viewer';
 
 interface TocPanelProps {
   outline: OutlineNode[];
+  /**
+   * Saved expanded node IDs:
+   * - `null` / `undefined`: never saved yet -> first-open default (depth-0 nodes expanded only)
+   * - `[]`: user explicitly collapsed all nodes -> restore all collapsed
+   */
+  expandedIds?: string[] | null;
+  onExpandedIdsChange?: (nextIds: string[]) => void;
   onSelectDestination: (pageNumber: number, topPt: number | null) => void;
 }
 
-function collectParentIds(nodes: OutlineNode[], maxDepth = 1, depth = 0): string[] {
-  if (depth >= maxDepth) return [];
-  const ids: string[] = [];
+/**
+ * First-open default: expand ONLY top-level (depth 0) nodes that have children.
+ * All child nodes at depth >= 1 start collapsed.
+ */
+export function getDefaultExpandedTocIds(outline: OutlineNode[]): string[] {
+  return outline.filter((node) => node.children.length > 0).map((node) => node.id);
+}
+
+function collectAllOutlineIds(nodes: OutlineNode[], acc = new Set<string>()): Set<string> {
   for (const node of nodes) {
+    acc.add(node.id);
     if (node.children.length > 0) {
-      ids.push(node.id);
-      ids.push(...collectParentIds(node.children, maxDepth, depth + 1));
+      collectAllOutlineIds(node.children, acc);
     }
   }
-  return ids;
+  return acc;
+}
+
+/**
+ * Resolves expanded ToC IDs cleanly while distinguishing "never saved yet" (`null`/`undefined`)
+ * from an explicit empty collapse state (`[]`), and pruning stale IDs.
+ */
+export function resolveExpandedTocIds(
+  outline: OutlineNode[],
+  savedIds: string[] | null | undefined,
+): string[] {
+  if (savedIds === null || savedIds === undefined) {
+    return getDefaultExpandedTocIds(outline);
+  }
+  const validIds = collectAllOutlineIds(outline);
+  const seen = new Set<string>();
+  const resolved: string[] = [];
+  for (const id of savedIds) {
+    if (validIds.has(id) && !seen.has(id)) {
+      seen.add(id);
+      resolved.push(id);
+    }
+  }
+  return resolved;
+}
+
+export function toggleTocNodeId(currentIds: string[], nodeId: string): string[] {
+  if (currentIds.includes(nodeId)) {
+    return currentIds.filter((id) => id !== nodeId);
+  }
+  return [...currentIds, nodeId];
 }
 
 /**
@@ -24,14 +67,27 @@ function collectParentIds(nodes: OutlineNode[], maxDepth = 1, depth = 0): string
  * supports manual expand/collapse and click-to-jump navigation only.
  * Does NOT track active sections, sync with scroll, or auto-expand.
  */
-export function TocPanel({ outline, onSelectDestination }: TocPanelProps) {
-  const [expandedIds, setExpandedIds] = useState<Set<string>>(
-    () => new Set(collectParentIds(outline, 1)),
+export function TocPanel({
+  outline,
+  expandedIds,
+  onExpandedIdsChange,
+  onSelectDestination,
+}: TocPanelProps) {
+  const isControlled = typeof onExpandedIdsChange === 'function';
+  const [localExpandedIds, setLocalExpandedIds] = useState<string[]>(() =>
+    resolveExpandedTocIds(outline, expandedIds),
   );
 
   useEffect(() => {
-    setExpandedIds(new Set(collectParentIds(outline, 1)));
-  }, [outline]);
+    if (!isControlled) {
+      setLocalExpandedIds(resolveExpandedTocIds(outline, expandedIds));
+    }
+  }, [isControlled, outline, expandedIds]);
+
+  const activeExpandedList = isControlled
+    ? resolveExpandedTocIds(outline, expandedIds)
+    : localExpandedIds;
+  const expandedSet = new Set(activeExpandedList);
 
   if (outline.length === 0) {
     return (
@@ -41,23 +97,19 @@ export function TocPanel({ outline, onSelectDestination }: TocPanelProps) {
     );
   }
 
-  const toggleExpanded = (nodeId: string) => {
-    setExpandedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(nodeId)) {
-        next.delete(nodeId);
-      } else {
-        next.add(nodeId);
-      }
-      return next;
-    });
+  const handleToggle = (nodeId: string) => {
+    if (isControlled && onExpandedIdsChange) {
+      onExpandedIdsChange(toggleTocNodeId(activeExpandedList, nodeId));
+    } else {
+      setLocalExpandedIds((prev) => toggleTocNodeId(prev, nodeId));
+    }
   };
 
   const renderNodes = (nodes: OutlineNode[], depth: number) => (
     <ul className="space-y-0.5" role={depth === 0 ? 'tree' : 'group'}>
       {nodes.map((node) => {
         const hasChildren = node.children.length > 0;
-        const isExpanded = expandedIds.has(node.id);
+        const isExpanded = hasChildren && expandedSet.has(node.id);
         return (
           <li key={node.id} role="treeitem" aria-expanded={hasChildren ? isExpanded : undefined}>
             <div
@@ -67,7 +119,11 @@ export function TocPanel({ outline, onSelectDestination }: TocPanelProps) {
               {hasChildren ? (
                 <button
                   type="button"
-                  onClick={() => toggleExpanded(node.id)}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    handleToggle(node.id);
+                  }}
                   aria-label={isExpanded ? `Collapse ${node.title}` : `Expand ${node.title}`}
                   className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-neutral-400 hover:bg-black/8 hover:text-neutral-700 dark:hover:bg-white/10 dark:hover:text-neutral-200"
                 >

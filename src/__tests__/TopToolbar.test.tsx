@@ -22,6 +22,7 @@ function makeReadySession(): TabSession {
     zoomScale: 1.0,
     pageDimensions: [{ widthPt: 612, heightPt: 792 }],
     outline: [],
+    expandedTocIds: null,
     navigationRequest: null,
   };
 }

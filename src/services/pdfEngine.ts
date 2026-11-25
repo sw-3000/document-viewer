@@ -187,15 +187,18 @@ export async function extractPdfOutline(pdfDoc: PDFDocumentProxy): Promise<Outli
   }
   if (!rawOutline || rawOutline.length === 0) return [];
 
-  let counter = 0;
-  const convert = async (items: RawOutlineItem[]): Promise<OutlineNode[]> => {
+  const convert = async (
+    items: RawOutlineItem[],
+    parentPath = '',
+  ): Promise<OutlineNode[]> => {
     const nodes: OutlineNode[] = [];
-    for (const item of items) {
-      counter += 1;
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i]!;
+      const nodeId = parentPath ? `${parentPath}.${i}` : `${i}`;
       const { pageNumber, topPt } = await resolveDestination(pdfDoc, item.dest);
-      const children = item.items?.length ? await convert(item.items) : [];
+      const children = item.items?.length ? await convert(item.items, nodeId) : [];
       nodes.push({
-        id: `toc-${counter}`,
+        id: nodeId,
         title: item.title?.trim() || 'Untitled Section',
         destPage: pageNumber,
         destTopPt: topPt,
