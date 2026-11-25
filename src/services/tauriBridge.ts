@@ -90,12 +90,14 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   defaultZoomMode: 'fit-width',
   defaultCoverOffset: true,
   theme: 'system',
+  sidebarWidth: 272,
 };
 
 export async function loadSettings(): Promise<AppSettings> {
   if (!isTauriRuntime()) return DEFAULT_APP_SETTINGS;
   try {
-    return await invoke<AppSettings>('load_settings');
+    const loaded = await invoke<Partial<AppSettings>>('load_settings');
+    return { ...DEFAULT_APP_SETTINGS, ...loaded };
   } catch {
     return DEFAULT_APP_SETTINGS;
   }

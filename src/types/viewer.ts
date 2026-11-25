@@ -10,6 +10,7 @@ export interface AppSettings {
   defaultZoomMode: Exclude<ZoomMode, 'custom'>;
   defaultCoverOffset: boolean;
   theme: ThemePreference;
+  sidebarWidth: number;
 }
 
 export interface DocumentReadingState {
