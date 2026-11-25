@@ -1,7 +1,11 @@
 use crate::pdf_io::{self, PdfFileMetadata};
+use crate::storage::{
+    self, AppSettings, DocumentReadingState, RecentDocumentItem,
+};
+use crate::win_assoc::{self, FileAssociationStatus};
 use crate::AppState;
 use std::sync::atomic::Ordering;
-use tauri::{AppHandle, State, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder};
 
 #[tauri::command]
 pub fn get_startup_files(window: tauri::Window, state: State<'_, AppState>) -> Vec<String> {
@@ -69,4 +73,106 @@ pub fn spawn_new_window(
         .map_err(|e| format!("Failed to open new window: {e}"))?;
 
     Ok(())
+}
+
+#[tauri::command]
+pub fn load_settings(app: AppHandle, state: State<'_, AppState>) -> Result<AppSettings, String> {
+    let _guard = state.storage_lock.lock().expect("storage mutex poisoned");
+    let config_dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|e| format!("Failed to resolve %APPDATA% config directory: {e}"))?;
+    Ok(storage::load_settings_from_dir(&config_dir))
+}
+
+#[tauri::command]
+pub fn save_settings(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    settings: AppSettings,
+) -> Result<(), String> {
+    let _guard = state.storage_lock.lock().expect("storage mutex poisoned");
+    let config_dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|e| format!("Failed to resolve %APPDATA% config directory: {e}"))?;
+    storage::save_settings_to_dir(&config_dir, &settings).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn load_reading_state(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    doc_hash: String,
+    file_path: String,
+) -> Result<Option<DocumentReadingState>, String> {
+    let _guard = state.storage_lock.lock().expect("storage mutex poisoned");
+    let config_dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|e| format!("Failed to resolve %APPDATA% config directory: {e}"))?;
+    Ok(storage::load_reading_state_from_dir(
+        &config_dir,
+        &doc_hash,
+        &file_path,
+    ))
+}
+
+#[tauri::command]
+pub fn save_reading_state(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    reading_state: DocumentReadingState,
+) -> Result<(), String> {
+    let _guard = state.storage_lock.lock().expect("storage mutex poisoned");
+    let config_dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|e| format!("Failed to resolve %APPDATA% config directory: {e}"))?;
+    storage::save_reading_state_to_dir(&config_dir, reading_state).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn list_recent_documents(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    limit: Option<usize>,
+) -> Result<Vec<RecentDocumentItem>, String> {
+    let _guard = state.storage_lock.lock().expect("storage mutex poisoned");
+    let config_dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|e| format!("Failed to resolve %APPDATA% config directory: {e}"))?;
+    Ok(storage::list_recent_documents_from_dir(
+        &config_dir,
+        limit.unwrap_or(10),
+    ))
+}
+
+#[tauri::command]
+pub fn remove_recent_document(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    doc_hash: String,
+) -> Result<(), String> {
+    let _guard = state.storage_lock.lock().expect("storage mutex poisoned");
+    let config_dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|e| format!("Failed to resolve %APPDATA% config directory: {e}"))?;
+    storage::remove_recent_document_from_dir(&config_dir, &doc_hash).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn get_file_association_status() -> FileAssociationStatus {
+    win_assoc::get_status()
+}
+
+#[tauri::command]
+pub fn register_default_pdf_viewer() -> Result<FileAssociationStatus, String> {
+    let exe_path = std::env::current_exe()
+        .map_err(|e| format!("Failed to determine executable path: {e}"))?;
+    let normalized = pdf_io::normalize_windows_path(&exe_path);
+    win_assoc::register_and_open_default_apps(&normalized)
+        .map_err(|e| format!("Failed to register PDF handler: {e}"))
 }

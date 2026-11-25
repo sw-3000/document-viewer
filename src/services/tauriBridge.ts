@@ -125,10 +125,10 @@ export async function loadReadingState(
   }
 }
 
-export async function saveReadingState(state: DocumentReadingState): Promise<void> {
+export async function saveReadingState(readingState: DocumentReadingState): Promise<void> {
   if (!isTauriRuntime()) return;
   try {
-    await invoke('save_reading_state', { state });
+    await invoke('save_reading_state', { readingState });
   } catch {
     // No-op if backend command not yet registered in earlier phase
   }

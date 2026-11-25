@@ -1,5 +1,7 @@
 mod commands;
 mod pdf_io;
+mod storage;
+mod win_assoc;
 
 use std::collections::HashMap;
 use std::sync::atomic::AtomicU64;
@@ -8,6 +10,7 @@ use std::sync::Mutex;
 pub struct AppState {
     pub pending_startup_files: Mutex<HashMap<String, Vec<String>>>,
     pub next_window_id: AtomicU64,
+    pub storage_lock: Mutex<()>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -25,6 +28,7 @@ pub fn run() {
     let state = AppState {
         pending_startup_files: Mutex::new(initial_map),
         next_window_id: AtomicU64::new(1),
+        storage_lock: Mutex::new(()),
     };
 
     tauri::Builder::default()
@@ -35,6 +39,14 @@ pub fn run() {
             commands::inspect_pdf_file,
             commands::read_pdf_bytes,
             commands::spawn_new_window,
+            commands::load_settings,
+            commands::save_settings,
+            commands::load_reading_state,
+            commands::save_reading_state,
+            commands::list_recent_documents,
+            commands::remove_recent_document,
+            commands::get_file_association_status,
+            commands::register_default_pdf_viewer,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Document Viewer");
