@@ -2,7 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2, Upload } from 'lucide-react';
 import type {
   AppSettings,
+  DocumentReadingState,
   PageDimension,
+  RecentDocumentItem,
   SearchMatch,
   TabSession,
   ViewMode,
@@ -13,8 +15,14 @@ import {
   getStartupFiles,
   inspectPdfFile,
   isWindowFullscreen,
+  listRecentDocuments,
+  loadReadingState,
+  loadSettings,
   pickPdfFiles,
   readPdfBytes,
+  removeRecentDocument,
+  saveReadingState,
+  saveSettings,
   setWindowFullscreen,
   setWindowTitle,
   spawnNewWindow,
@@ -41,14 +49,35 @@ import { TabStrip } from './components/TabStrip';
 import { PdfViewport } from './components/PdfViewport';
 import { SidebarShell } from './components/Sidebar/SidebarShell';
 import { SearchBar } from './components/SearchBar';
+import { SettingsDialog } from './components/SettingsDialog';
 import { PasswordDialog } from './components/PasswordDialog';
 import { EmptyState } from './components/EmptyState';
 import { ErrorState } from './components/ErrorState';
 
 let nextTabSeq = 1;
 
+function toReadingStatePayload(tab: TabSession): DocumentReadingState | null {
+  if (tab.status !== 'ready' || !tab.docHash) return null;
+  return {
+    docHash: tab.docHash,
+    filePath: tab.filePath,
+    fileName: tab.fileName,
+    totalPages: tab.totalPages,
+    pageNumber: tab.currentPage,
+    scrollOffsetRatio: tab.scrollOffsetRatio,
+    viewMode: tab.viewMode,
+    coverOffset: tab.coverOffset,
+    zoomMode: tab.zoomMode,
+    zoomScale: tab.zoomScale,
+    updatedAtMs: Date.now(),
+  };
+}
+
 export default function App() {
-  const [settings] = useState<AppSettings>(DEFAULT_APP_SETTINGS);
+  const [settings, setSettings] = useState<AppSettings>(DEFAULT_APP_SETTINGS);
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [recentDocuments, setRecentDocuments] = useState<RecentDocumentItem[]>([]);
   useTheme(settings.theme);
 
   const [tabs, setTabs] = useState<TabSession[]>([]);
@@ -78,8 +107,33 @@ export default function App() {
   const textCacheRef = useRef<Map<string, Map<number, PageTextData>>>(new Map());
   const tabsRef = useRef<TabSession[]>(tabs);
   tabsRef.current = tabs;
+  const settingsRef = useRef<AppSettings>(settings);
+  settingsRef.current = settings;
 
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? null;
+
+  const refreshRecentDocuments = useCallback(async () => {
+    const list = await listRecentDocuments(10);
+    setRecentDocuments(list);
+  }, []);
+
+  // Load persisted settings & recent documents on startup
+  useEffect(() => {
+    let active = true;
+    void (async () => {
+      const [loadedSettings, recents] = await Promise.all([
+        loadSettings(),
+        listRecentDocuments(10),
+      ]);
+      if (!active) return;
+      setSettings(loadedSettings);
+      setRecentDocuments(recents);
+      setSettingsLoaded(true);
+    })();
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     const title = activeTab
@@ -87,6 +141,11 @@ export default function App() {
       : 'Document Viewer';
     void setWindowTitle(title);
   }, [activeTab?.fileName]);
+
+  const handleUpdateSettings = useCallback((next: AppSettings) => {
+    setSettings(next);
+    void saveSettings(next);
+  }, []);
 
   const disposeTabResources = useCallback((tabId: string) => {
     backfillAbortRef.current.get(tabId)?.abort();
@@ -99,18 +158,46 @@ export default function App() {
     }
   }, []);
 
+  const flushTabReadingState = useCallback(async (tab: TabSession) => {
+    const payload = toReadingStatePayload(tab);
+    if (payload) {
+      await saveReadingState(payload);
+    }
+  }, []);
+
   const loadIntoTab = useCallback(
     async (tabId: string, filePath: string, password?: string) => {
       disposeTabResources(tabId);
 
       try {
         const meta = await inspectPdfFile(filePath);
-        const bytes = await readPdfBytes(meta.filePath);
+        const [bytes, savedState] = await Promise.all([
+          readPdfBytes(meta.filePath),
+          loadReadingState(meta.docHash, meta.filePath),
+        ]);
         const handle = await loadPdfDocument(bytes, password);
 
         handlesRef.current.set(tabId, handle);
         const abortCtrl = new AbortController();
         backfillAbortRef.current.set(tabId, abortCtrl);
+
+        const curSettings = settingsRef.current;
+        const shouldResumePage = Boolean(savedState && curSettings.resumeLastPage);
+
+        const restoredPage = shouldResumePage && savedState
+          ? Math.min(Math.max(1, savedState.pageNumber), handle.numPages)
+          : 1;
+        const restoredScroll = shouldResumePage && savedState ? savedState.scrollOffsetRatio : 0;
+        const restoredViewMode: ViewMode = savedState
+          ? savedState.viewMode
+          : curSettings.defaultViewMode;
+        const restoredCoverOffset = savedState
+          ? savedState.coverOffset
+          : curSettings.defaultCoverOffset;
+        const restoredZoomMode: ZoomMode = savedState
+          ? savedState.zoomMode
+          : curSettings.defaultZoomMode;
+        const restoredZoomScale = savedState ? savedState.zoomScale : 1.0;
 
         setTabs((prev) =>
           prev.map((t) =>
@@ -125,8 +212,12 @@ export default function App() {
                   passwordError: null,
                   errorMessage: null,
                   totalPages: handle.numPages,
-                  currentPage: 1,
-                  scrollOffsetRatio: 0,
+                  currentPage: restoredPage,
+                  scrollOffsetRatio: restoredScroll,
+                  viewMode: restoredViewMode,
+                  coverOffset: restoredCoverOffset,
+                  zoomMode: restoredZoomMode,
+                  zoomScale: restoredZoomScale,
                   pageDimensions: handle.initialDimensions,
                   outline: handle.outline,
                 }
@@ -199,6 +290,7 @@ export default function App() {
           continue;
         }
 
+        const curSettings = settingsRef.current;
         const tabId = `tab-${nextTabSeq++}`;
         const fileName = rawPath.split(/[\\/]/).pop() || rawPath;
         const newTab: TabSession = {
@@ -213,9 +305,9 @@ export default function App() {
           totalPages: 0,
           currentPage: 1,
           scrollOffsetRatio: 0,
-          viewMode: settings.defaultViewMode,
-          coverOffset: settings.defaultCoverOffset,
-          zoomMode: settings.defaultZoomMode,
+          viewMode: curSettings.defaultViewMode,
+          coverOffset: curSettings.defaultCoverOffset,
+          zoomMode: curSettings.defaultZoomMode,
           zoomScale: 1.0,
           pageDimensions: [],
           outline: [],
@@ -227,7 +319,7 @@ export default function App() {
         void loadIntoTab(tabId, rawPath);
       }
     },
-    [loadIntoTab, settings.defaultCoverOffset, settings.defaultViewMode, settings.defaultZoomMode],
+    [loadIntoTab],
   );
 
   const handleOpenPicker = useCallback(async () => {
@@ -239,6 +331,10 @@ export default function App() {
 
   const closeTab = useCallback(
     (tabId: string) => {
+      const target = tabsRef.current.find((t) => t.id === tabId);
+      if (target) {
+        void flushTabReadingState(target).then(() => refreshRecentDocuments());
+      }
       disposeTabResources(tabId);
       setTabs((prev) => {
         const idx = prev.findIndex((t) => t.id === tabId);
@@ -251,19 +347,58 @@ export default function App() {
         return next;
       });
     },
-    [disposeTabResources],
+    [disposeTabResources, flushTabReadingState, refreshRecentDocuments],
   );
 
   const popOutTab = useCallback(
     async (tab: TabSession) => {
+      await flushTabReadingState(tab);
       await spawnNewWindow(tab.filePath);
       closeTab(tab.id);
     },
-    [closeTab],
+    [closeTab, flushTabReadingState],
   );
 
-  // Load startup files passed via CLI args (or spawned secondary windows)
+  // Debounced auto-save for the active document's reading state
   useEffect(() => {
+    if (!activeTab || activeTab.status !== 'ready' || !activeTab.docHash) return;
+    const payload = toReadingStatePayload(activeTab);
+    if (!payload) return;
+
+    const timer = window.setTimeout(() => {
+      void saveReadingState(payload);
+    }, 350);
+
+    return () => window.clearTimeout(timer);
+  }, [
+    activeTab?.id,
+    activeTab?.status,
+    activeTab?.docHash,
+    activeTab?.currentPage,
+    activeTab?.scrollOffsetRatio,
+    activeTab?.viewMode,
+    activeTab?.coverOffset,
+    activeTab?.zoomMode,
+    activeTab?.zoomScale,
+  ]);
+
+  // Flush reading state on window unload
+  useEffect(() => {
+    const handleUnload = () => {
+      for (const tab of tabsRef.current) {
+        const payload = toReadingStatePayload(tab);
+        if (payload) {
+          void saveReadingState(payload);
+        }
+      }
+    };
+    window.addEventListener('beforeunload', handleUnload);
+    return () => window.removeEventListener('beforeunload', handleUnload);
+  }, []);
+
+  // Load startup files passed via CLI args once settings are ready
+  useEffect(() => {
+    if (!settingsLoaded) return;
     let active = true;
     void (async () => {
       const startup = await getStartupFiles();
@@ -274,7 +409,7 @@ export default function App() {
     return () => {
       active = false;
     };
-  }, [openFilePaths]);
+  }, [settingsLoaded, openFilePaths]);
 
   // Native WebView2 Drag-and-Drop
   useEffect(() => {
@@ -283,9 +418,8 @@ export default function App() {
       onEnter: () => setIsDraggingOver(true),
       onLeave: () => setIsDraggingOver(false),
       onDropPaths: (paths) => {
-        const pdfs = paths.filter((p) => p.toLowerCase().endsWith('.pdf'));
-        if (pdfs.length > 0) {
-          void openFilePaths(pdfs);
+        if (paths.length > 0) {
+          void openFilePaths(paths);
         }
       },
     }).then((fn) => {
@@ -394,7 +528,6 @@ export default function App() {
           pageData = await extractPageTextData(handle.pdfDoc, p);
           if (cancelled) return;
           cache!.set(p, pageData);
-          // Yield periodically so UI stays 60fps on 500+ page books
           if (p % 4 === 0) {
             await new Promise((r) => setTimeout(r, 0));
           }
@@ -527,8 +660,12 @@ export default function App() {
       onPrevPage: () => stepPage(-1),
       onNextPage: () => stepPage(1),
       onToggleFullscreen: () => void toggleFullscreen(),
-      onOpenSettings: () => {},
+      onOpenSettings: () => setSettingsOpen(true),
       onEscape: () => {
+        if (settingsOpen) {
+          setSettingsOpen(false);
+          return;
+        }
         if (searchOpen) {
           setSearchOpen(false);
           setSearchQuery('');
@@ -551,6 +688,7 @@ export default function App() {
       activeTabId,
       closeTab,
       searchOpen,
+      settingsOpen,
       stepSearchMatch,
       updateActiveTab,
       effectiveScale,
@@ -624,7 +762,7 @@ export default function App() {
               }
             }}
             onToggleFullscreen={() => void toggleFullscreen()}
-            onOpenSettings={() => {}}
+            onOpenSettings={() => setSettingsOpen(true)}
           />
 
           <TabStrip
@@ -671,10 +809,12 @@ export default function App() {
 
         {!activeTab && (
           <EmptyState
-            recentDocuments={[]}
+            recentDocuments={recentDocuments}
             onOpenFile={() => void handleOpenPicker()}
             onOpenRecent={(p) => void openFilePaths([p])}
-            onRemoveRecent={() => {}}
+            onRemoveRecent={(hash) => {
+              void removeRecentDocument(hash).then(() => refreshRecentDocuments());
+            }}
           />
         )}
 
@@ -732,6 +872,13 @@ export default function App() {
           />
         )}
       </main>
+
+      <SettingsDialog
+        isOpen={settingsOpen}
+        settings={settings}
+        onUpdateSettings={handleUpdateSettings}
+        onClose={() => setSettingsOpen(false)}
+      />
 
       {isDraggingOver && (
         <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center bg-blue-600/12 backdrop-blur-[2px]">

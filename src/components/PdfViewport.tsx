@@ -47,6 +47,7 @@ export function PdfViewport({
 }: PdfViewportProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [viewportSize, setViewportSize] = useState({ width: 900, height: 700 });
+  const [hasMeasuredViewport, setHasMeasuredViewport] = useState(false);
   const [scrollTop, setScrollTop] = useState(0);
   const [dpr, setDpr] = useState(() =>
     typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1,
@@ -73,6 +74,9 @@ export function PdfViewport({
         width: el.clientWidth,
         height: el.clientHeight,
       });
+      if (el.clientWidth > 0 && el.clientHeight > 0) {
+        setHasMeasuredViewport(true);
+      }
     };
     updateSize();
 
@@ -184,10 +188,10 @@ export function PdfViewport({
     setScrollTop(el.scrollTop);
   }, [layoutMetrics.totalHeight, layoutMetrics.maxRowWidth, effectiveScale]);
 
-  // Restore saved scroll position once on document open
+  // Restore saved scroll position once on document open after viewport measurement
   useEffect(() => {
     const el = containerRef.current;
-    if (!el || restoredInitialScrollRef.current === session.id) return;
+    if (!el || !hasMeasuredViewport || restoredInitialScrollRef.current === session.id) return;
     if (layoutMetrics.totalHeight <= 0) return;
 
     restoredInitialScrollRef.current = session.id;
@@ -213,6 +217,7 @@ export function PdfViewport({
       setScrollTop(0);
     }
   }, [
+    hasMeasuredViewport,
     session.id,
     session.viewMode,
     session.scrollOffsetRatio,
