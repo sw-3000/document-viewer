@@ -1,0 +1,14 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Minimal capabilities for Document Viewer main and spawned reader windows",
+  "windows": ["main", "viewer-*"],
+  "permissions": [
+    "core:window:allow-set-fullscreen",
+    "core:window:allow-is-fullscreen",
+    "core:window:allow-set-title",
+    "core:window:allow-close",
+    "core:event:default",
+    "core:webview:default"
+  ]
+}

@@ -1,0 +1,60 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@layer base {
+  :root {
+    color-scheme: light;
+    --bg-canvas: #eef0f3;
+    --bg-surface: rgba(255, 255, 255, 0.92);
+    --bg-surface-solid: #ffffff;
+    --border-subtle: rgba(15, 23, 42, 0.1);
+  }
+
+  html.dark {
+    color-scheme: dark;
+    --bg-canvas: #121417;
+    --bg-surface: rgba(28, 31, 36, 0.92);
+    --bg-surface-solid: #1c1f24;
+    --border-subtle: rgba(255, 255, 255, 0.1);
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    font-family: "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, sans-serif;
+  }
+}
+
+/* Native-feeling Windows 11 scrollbar */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: rgba(100, 116, 139, 0.38);
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(100, 116, 139, 0.62);
+}
+
+html.dark ::-webkit-scrollbar-thumb {
+  background-color: rgba(148, 163, 184, 0.28);
+}
+
+html.dark ::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(148, 163, 184, 0.5);
+}

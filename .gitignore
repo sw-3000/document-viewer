@@ -1,0 +1,14 @@
+# Dependencies & build outputs
+node_modules/
+dist/
+public/pdfjs/
+
+# Rust / Tauri build artifacts
+src-tauri/target/
+
+# Local test files & environment
+*.local
+*.test.pdf
+test-pdfs/
+.DS_Store
+Thumbs.db
